@@ -4,10 +4,19 @@ import json
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from b52_telemetry.app import create_app
 from b52_telemetry.contract import TELEMETRY_SCHEMA_VERSION, TelemetryPayload
+
+
+def allow_telemetry_access(_: Request) -> None:
+    return None
+
+
+def create_test_app(path: Path) -> FastAPI:
+    return create_app(path, telemetry_authorizer=allow_telemetry_access)
 
 
 def canonical_payload() -> dict[str, object]:
@@ -69,7 +78,7 @@ def test_latest_returns_canonical_payload_unchanged(tmp_path: Path) -> None:
     }
     write_payload(path, payload)
 
-    client = TestClient(create_app(path))
+    client = TestClient(create_test_app(path))
 
     response = client.get("/api/telemetry/latest")
 
@@ -79,7 +88,7 @@ def test_latest_returns_canonical_payload_unchanged(tmp_path: Path) -> None:
 
 def test_latest_returns_503_when_source_is_unavailable(tmp_path: Path) -> None:
     path = tmp_path / "telemetry.latest.json"
-    client = TestClient(create_app(path))
+    client = TestClient(create_test_app(path))
 
     response = client.get("/api/telemetry/latest")
 
@@ -94,7 +103,7 @@ def test_latest_returns_503_when_source_contains_invalid_json(
 ) -> None:
     path = tmp_path / "telemetry.latest.json"
     path.write_text('{"schema_version":3', encoding="utf-8")
-    client = TestClient(create_app(path))
+    client = TestClient(create_test_app(path))
 
     response = client.get("/api/telemetry/latest")
 
@@ -109,7 +118,7 @@ def test_latest_returns_503_for_unsupported_schema(tmp_path: Path) -> None:
     payload = canonical_payload()
     payload["schema_version"] = 2
     write_payload(path, payload)
-    client = TestClient(create_app(path))
+    client = TestClient(create_test_app(path))
 
     response = client.get("/api/telemetry/latest")
 
@@ -124,7 +133,7 @@ def test_latest_does_not_reject_old_canonical_snapshot(tmp_path: Path) -> None:
     payload = canonical_payload()
     payload["generated_at"] = "2025-01-01T00:00:00+00:00"
     write_payload(path, payload)
-    client = TestClient(create_app(path))
+    client = TestClient(create_test_app(path))
 
     response = client.get("/api/telemetry/latest")
 
@@ -170,7 +179,7 @@ def test_stream_returns_canonical_payload_as_sse(
     monkeypatch.setattr(TelemetryFileSource, "read", read_once_then_unavailable)
     monkeypatch.setattr(app_module, "async_sleep", no_sleep)
 
-    client = TestClient(create_app(path))
+    client = TestClient(create_test_app(path))
 
     response = client.get("/api/telemetry/stream")
 
@@ -190,7 +199,7 @@ def test_stream_returns_canonical_payload_as_sse(
 
 def test_stream_returns_503_when_source_is_unavailable(tmp_path: Path) -> None:
     path = tmp_path / "telemetry.latest.json"
-    client = TestClient(create_app(path))
+    client = TestClient(create_test_app(path))
 
     response = client.get("/api/telemetry/stream")
 
@@ -203,7 +212,7 @@ def test_stream_returns_503_when_source_is_unavailable(tmp_path: Path) -> None:
 def test_stream_returns_503_when_source_is_invalid(tmp_path: Path) -> None:
     path = tmp_path / "telemetry.latest.json"
     path.write_text('{"schema_version":3', encoding="utf-8")
-    client = TestClient(create_app(path))
+    client = TestClient(create_test_app(path))
 
     response = client.get("/api/telemetry/stream")
 
@@ -247,7 +256,7 @@ def test_stream_closes_if_source_becomes_invalid(
     monkeypatch.setattr(TelemetryFileSource, "read", read_once_then_invalid)
     monkeypatch.setattr(app_module, "async_sleep", no_sleep)
 
-    client = TestClient(create_app(path))
+    client = TestClient(create_test_app(path))
 
     response = client.get("/api/telemetry/stream")
 
@@ -275,7 +284,7 @@ def test_public_snapshot_returns_only_approved_projection(tmp_path: Path) -> Non
     }
     write_payload(path, payload)
 
-    client = TestClient(create_app(path))
+    client = TestClient(create_test_app(path))
 
     response = client.get("/api/public/snapshot")
 
@@ -293,7 +302,7 @@ def test_public_snapshot_returns_503_when_source_is_unavailable(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "telemetry.latest.json"
-    client = TestClient(create_app(path))
+    client = TestClient(create_test_app(path))
 
     response = client.get("/api/public/snapshot")
 
@@ -308,7 +317,7 @@ def test_public_snapshot_returns_503_when_source_is_invalid(
 ) -> None:
     path = tmp_path / "telemetry.latest.json"
     path.write_text('{"schema_version":3', encoding="utf-8")
-    client = TestClient(create_app(path))
+    client = TestClient(create_test_app(path))
 
     response = client.get("/api/public/snapshot")
 
@@ -316,3 +325,125 @@ def test_public_snapshot_returns_503_when_source_is_invalid(
     assert response.json() == {
         "detail": "telemetry source invalid",
     }
+
+
+def test_public_snapshot_does_not_require_telemetry_authorization(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "telemetry.latest.json"
+    payload = canonical_payload()
+    write_payload(path, payload)
+
+    authorization_calls = 0
+
+    def deny_if_called(_: Request) -> None:
+        nonlocal authorization_calls
+        authorization_calls += 1
+        raise AssertionError("public endpoint invoked telemetry authorizer")
+
+    client = TestClient(
+        create_app(
+            path,
+            telemetry_authorizer=deny_if_called,
+        )
+    )
+
+    response = client.get("/api/public/snapshot")
+
+    assert response.status_code == 200
+    assert authorization_calls == 0
+
+
+def test_latest_telemetry_denies_access_by_default(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "telemetry.latest.json"
+    write_payload(path, canonical_payload())
+
+    client = TestClient(create_app(path))
+
+    response = client.get("/api/telemetry/latest")
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "telemetry access denied",
+    }
+
+
+def test_stream_telemetry_denies_access_by_default(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "telemetry.latest.json"
+    write_payload(path, canonical_payload())
+
+    client = TestClient(create_app(path))
+
+    response = client.get("/api/telemetry/stream")
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "telemetry access denied",
+    }
+
+
+def test_latest_telemetry_invokes_authorizer_before_returning_payload(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "telemetry.latest.json"
+    payload = canonical_payload()
+    write_payload(path, payload)
+
+    authorization_calls = 0
+
+    def authorize(_: Request) -> None:
+        nonlocal authorization_calls
+        authorization_calls += 1
+
+    client = TestClient(
+        create_app(
+            path,
+            telemetry_authorizer=authorize,
+        )
+    )
+
+    response = client.get("/api/telemetry/latest")
+
+    assert response.status_code == 200
+    assert response.json() == payload
+    assert authorization_calls == 1
+
+
+def test_stream_telemetry_invokes_authorizer_before_opening_stream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "telemetry.latest.json"
+    payload = canonical_payload()
+    write_payload(path, payload)
+
+    authorization_calls = 0
+
+    def authorize(_: Request) -> None:
+        nonlocal authorization_calls
+        authorization_calls += 1
+
+    async def stop_after_first_frame(_: float) -> None:
+        path.unlink()
+
+    monkeypatch.setattr(
+        "b52_telemetry.app.async_sleep",
+        stop_after_first_frame,
+    )
+
+    client = TestClient(
+        create_app(
+            path,
+            telemetry_authorizer=authorize,
+        )
+    )
+
+    response = client.get("/api/telemetry/stream")
+
+    assert response.status_code == 200
+    assert response.text.count("\n\n") == 1
+    assert authorization_calls == 1

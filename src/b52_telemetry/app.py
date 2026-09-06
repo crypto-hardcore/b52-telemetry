@@ -5,9 +5,13 @@ from asyncio import sleep as async_sleep
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from starlette.responses import StreamingResponse
 
+from b52_telemetry.authorization import (
+    TelemetryAuthorizer,
+    deny_telemetry_access,
+)
 from b52_telemetry.contract import TelemetryPayload
 from b52_telemetry.public_projection import (
     PublicTelemetryPayload,
@@ -47,7 +51,10 @@ async def _stream_telemetry(
             return
 
 
-def create_app(telemetry_path: Path) -> FastAPI:
+def create_app(
+    telemetry_path: Path,
+    telemetry_authorizer: TelemetryAuthorizer = deny_telemetry_access,
+) -> FastAPI:
     source = TelemetryFileSource(telemetry_path)
     app = FastAPI()
 
@@ -74,6 +81,7 @@ def create_app(telemetry_path: Path) -> FastAPI:
     @app.get(
         "/api/telemetry/latest",
         response_model=None,
+        dependencies=[Depends(telemetry_authorizer)],
     )
     def latest_telemetry() -> TelemetryPayload:
         try:
@@ -92,6 +100,7 @@ def create_app(telemetry_path: Path) -> FastAPI:
     @app.get(
         "/api/telemetry/stream",
         response_model=None,
+        dependencies=[Depends(telemetry_authorizer)],
     )
     def stream_telemetry() -> StreamingResponse:
         try:
