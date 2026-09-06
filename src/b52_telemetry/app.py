@@ -4,11 +4,14 @@ import json
 from asyncio import sleep as async_sleep
 from collections.abc import AsyncIterator
 from pathlib import Path
+from secrets import compare_digest
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 from b52_telemetry.authorization import (
+    TELEMETRY_SESSION_COOKIE_NAME,
     TelemetryAuthorizer,
     deny_telemetry_access,
 )
@@ -17,6 +20,7 @@ from b52_telemetry.public_projection import (
     PublicTelemetryPayload,
     project_public_telemetry,
 )
+from b52_telemetry.session import SessionStore
 from b52_telemetry.source import (
     TelemetryFileSource,
     TelemetrySourceInvalid,
@@ -24,6 +28,10 @@ from b52_telemetry.source import (
 )
 
 TELEMETRY_STREAM_INTERVAL_SECONDS = 1.0
+
+
+class SessionRequest(BaseModel):
+    access_key: str
 
 
 def _encode_sse_payload(payload: TelemetryPayload) -> str:
@@ -54,6 +62,8 @@ async def _stream_telemetry(
 def create_app(
     telemetry_path: Path,
     telemetry_authorizer: TelemetryAuthorizer = deny_telemetry_access,
+    session_store: SessionStore | None = None,
+    telemetry_access_key: str | None = None,
 ) -> FastAPI:
     source = TelemetryFileSource(telemetry_path)
     app = FastAPI()
@@ -77,6 +87,69 @@ def create_app(
             ) from exc
 
         return project_public_telemetry(telemetry)
+
+    @app.post("/api/session")
+    def create_session(
+        session_request: SessionRequest,
+        response: Response,
+    ) -> dict[str, bool]:
+        if session_store is None or telemetry_access_key is None:
+            raise HTTPException(
+                status_code=503,
+                detail="session authentication unavailable",
+            )
+
+        if not compare_digest(
+            session_request.access_key,
+            telemetry_access_key,
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail="invalid access credential",
+            )
+
+        session_id = session_store.create()
+        response.set_cookie(
+            key=TELEMETRY_SESSION_COOKIE_NAME,
+            value=session_id,
+            httponly=True,
+            secure=True,
+            samesite="strict",
+            path="/",
+        )
+
+        return {"authenticated": True}
+
+    @app.get("/api/session")
+    def session_status(request: Request) -> dict[str, bool]:
+        if session_store is None:
+            return {"authenticated": False}
+
+        session_id = request.cookies.get(TELEMETRY_SESSION_COOKIE_NAME)
+
+        return {
+            "authenticated": (
+                session_id is not None and session_store.contains(session_id)
+            )
+        }
+
+    @app.delete("/api/session")
+    def delete_session(
+        request: Request,
+        response: Response,
+    ) -> dict[str, bool]:
+        if session_store is not None:
+            session_id = request.cookies.get(TELEMETRY_SESSION_COOKIE_NAME)
+
+            if session_id is not None:
+                session_store.revoke(session_id)
+
+        response.delete_cookie(
+            key=TELEMETRY_SESSION_COOKIE_NAME,
+            path="/",
+        )
+
+        return {"authenticated": False}
 
     @app.get(
         "/api/telemetry/latest",

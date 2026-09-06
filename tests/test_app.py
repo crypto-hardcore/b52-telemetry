@@ -447,3 +447,254 @@ def test_stream_telemetry_invokes_authorizer_before_opening_stream(
     assert response.status_code == 200
     assert response.text.count("\n\n") == 1
     assert authorization_calls == 1
+
+
+def create_https_client(app: FastAPI) -> TestClient:
+    return TestClient(app, base_url="https://testserver")
+
+
+def test_session_creation_accepts_valid_access_key(tmp_path: Path) -> None:
+    from b52_telemetry.authorization import SessionTelemetryAuthorizer
+    from b52_telemetry.session import SessionStore
+
+    path = tmp_path / "telemetry.latest.json"
+    store = SessionStore()
+
+    client = create_https_client(
+        create_app(
+            path,
+            telemetry_authorizer=SessionTelemetryAuthorizer(store),
+            session_store=store,
+            telemetry_access_key="expected-access-key",
+        )
+    )
+
+    response = client.post(
+        "/api/session",
+        json={"access_key": "expected-access-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"authenticated": True}
+    assert "b52_telemetry_session" in response.cookies
+
+
+def test_session_creation_rejects_invalid_access_key(tmp_path: Path) -> None:
+    from b52_telemetry.session import SessionStore
+
+    path = tmp_path / "telemetry.latest.json"
+
+    client = create_https_client(
+        create_app(
+            path,
+            session_store=SessionStore(),
+            telemetry_access_key="expected-access-key",
+        )
+    )
+
+    response = client.post(
+        "/api/session",
+        json={"access_key": "wrong-access-key"},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "invalid access credential",
+    }
+
+
+def test_session_creation_is_unavailable_without_session_configuration(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "telemetry.latest.json"
+    client = create_https_client(create_app(path))
+
+    response = client.post(
+        "/api/session",
+        json={"access_key": "anything"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "session authentication unavailable",
+    }
+
+
+def test_session_status_reports_authenticated_session(tmp_path: Path) -> None:
+    from b52_telemetry.session import SessionStore
+
+    path = tmp_path / "telemetry.latest.json"
+    store = SessionStore()
+
+    client = create_https_client(
+        create_app(
+            path,
+            session_store=store,
+            telemetry_access_key="expected-access-key",
+        )
+    )
+
+    login_response = client.post(
+        "/api/session",
+        json={"access_key": "expected-access-key"},
+    )
+
+    assert login_response.status_code == 200
+
+    response = client.get("/api/session")
+
+    assert response.status_code == 200
+    assert response.json() == {"authenticated": True}
+
+
+def test_session_status_reports_unauthenticated_without_valid_session(
+    tmp_path: Path,
+) -> None:
+    from b52_telemetry.session import SessionStore
+
+    path = tmp_path / "telemetry.latest.json"
+
+    client = create_https_client(
+        create_app(
+            path,
+            session_store=SessionStore(),
+            telemetry_access_key="expected-access-key",
+        )
+    )
+
+    response = client.get("/api/session")
+
+    assert response.status_code == 200
+    assert response.json() == {"authenticated": False}
+
+
+def test_delete_session_revokes_authenticated_session(tmp_path: Path) -> None:
+    from b52_telemetry.session import SessionStore
+
+    path = tmp_path / "telemetry.latest.json"
+    store = SessionStore()
+
+    client = create_https_client(
+        create_app(
+            path,
+            session_store=store,
+            telemetry_access_key="expected-access-key",
+        )
+    )
+
+    login_response = client.post(
+        "/api/session",
+        json={"access_key": "expected-access-key"},
+    )
+    session_id = login_response.cookies["b52_telemetry_session"]
+
+    response = client.delete("/api/session")
+
+    assert response.status_code == 200
+    assert response.json() == {"authenticated": False}
+    assert not store.contains(session_id)
+
+
+def test_authenticated_cookie_grants_latest_telemetry(tmp_path: Path) -> None:
+    from b52_telemetry.authorization import SessionTelemetryAuthorizer
+    from b52_telemetry.session import SessionStore
+
+    path = tmp_path / "telemetry.latest.json"
+    payload = canonical_payload()
+    write_payload(path, payload)
+
+    store = SessionStore()
+
+    client = create_https_client(
+        create_app(
+            path,
+            telemetry_authorizer=SessionTelemetryAuthorizer(store),
+            session_store=store,
+            telemetry_access_key="expected-access-key",
+        )
+    )
+
+    login_response = client.post(
+        "/api/session",
+        json={"access_key": "expected-access-key"},
+    )
+
+    assert "b52_telemetry_session" in login_response.cookies
+
+    response = client.get("/api/telemetry/latest")
+
+    assert response.status_code == 200
+    assert response.json() == payload
+
+
+def test_missing_session_cookie_is_rejected_by_session_authorizer(
+    tmp_path: Path,
+) -> None:
+    from b52_telemetry.authorization import SessionTelemetryAuthorizer
+    from b52_telemetry.session import SessionStore
+
+    path = tmp_path / "telemetry.latest.json"
+    write_payload(path, canonical_payload())
+
+    store = SessionStore()
+
+    client = create_https_client(
+        create_app(
+            path,
+            telemetry_authorizer=SessionTelemetryAuthorizer(store),
+            session_store=store,
+            telemetry_access_key="expected-access-key",
+        )
+    )
+
+    response = client.get("/api/telemetry/latest")
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "telemetry authentication required",
+    }
+
+
+def test_authenticated_cookie_grants_telemetry_stream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from b52_telemetry.authorization import SessionTelemetryAuthorizer
+    from b52_telemetry.session import SessionStore
+
+    path = tmp_path / "telemetry.latest.json"
+    payload = canonical_payload()
+    write_payload(path, payload)
+
+    store = SessionStore()
+
+    async def stop_after_first_frame(_: float) -> None:
+        path.unlink()
+
+    monkeypatch.setattr(
+        "b52_telemetry.app.async_sleep",
+        stop_after_first_frame,
+    )
+
+    client = create_https_client(
+        create_app(
+            path,
+            telemetry_authorizer=SessionTelemetryAuthorizer(store),
+            session_store=store,
+            telemetry_access_key="expected-access-key",
+        )
+    )
+
+    login_response = client.post(
+        "/api/session",
+        json={"access_key": "expected-access-key"},
+    )
+
+    assert login_response.status_code == 200
+    assert "b52_telemetry_session" in login_response.cookies
+
+    response = client.get("/api/telemetry/stream")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text.count("\n\n") == 1
