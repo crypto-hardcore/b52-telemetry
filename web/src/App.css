@@ -254,3 +254,99 @@ tbody tr:last-child td {
     grid-template-columns: 1fr;
   }
 }
+
+.access-page {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.access-panel {
+  width: min(460px, 100%);
+  border: 1px solid #28313a;
+  border-radius: 6px;
+  padding: 28px;
+  background: #10151b;
+}
+
+.access-panel h1 {
+  font-size: clamp(2rem, 8vw, 3rem);
+}
+
+.access-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.access-form label {
+  color: #82909f;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.access-form input {
+  width: 100%;
+  border: 1px solid #35414d;
+  border-radius: 4px;
+  padding: 12px 13px;
+  outline: none;
+  color: #f0f3f6;
+  background: #090d12;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.access-form input:focus {
+  border-color: #657789;
+}
+
+.access-form button,
+.logout-button {
+  border: 1px solid #3a4652;
+  border-radius: 4px;
+  padding: 10px 14px;
+  color: #dce3ea;
+  background: #151b22;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.access-form button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.access-form button:not(:disabled):hover,
+.logout-button:hover {
+  background: #1b232c;
+}
+
+.access-error {
+  margin: 16px 0 0;
+  color: #d7a0a0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.header-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 20px;
+}
+
+.logout-button {
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  .header-actions {
+    width: 100%;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

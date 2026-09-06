@@ -1,6 +1,11 @@
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 import "./App.css";
+import {
+  createSession,
+  deleteSession,
+  fetchSessionStatus,
+} from "./sessionClient";
 import {
   fetchLatestTelemetry,
   subscribeTelemetry,
@@ -408,7 +413,105 @@ function MissionPanel({ value }: { value: unknown }) {
   );
 }
 
-export function App() {
+type AuthenticationState =
+  | "CHECKING"
+  | "UNAUTHENTICATED"
+  | "AUTHENTICATED";
+
+function AccessScreen({
+  sessionError,
+  onAuthenticated,
+}: {
+  sessionError: string | null;
+  onAuthenticated: () => void;
+}) {
+  const [accessKey, setAccessKey] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [authenticationError, setAuthenticationError] =
+    useState<string | null>(null);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (submitting) {
+      return;
+    }
+
+    setSubmitting(true);
+    setAuthenticationError(null);
+
+    try {
+      const session = await createSession(accessKey);
+
+      if (!session.authenticated) {
+        throw new Error("session was not established");
+      }
+
+      setAccessKey("");
+      onAuthenticated();
+    } catch {
+      setAuthenticationError(
+        "Access denied or authentication service unavailable.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <main className="access-page">
+      <section className="access-panel">
+        <p className="eyebrow">B-52 OBSERVATION SURFACE</p>
+        <h1>B-52 TELEMETRY</h1>
+        <p className="subtitle">
+          Restricted read-only canonical runtime telemetry.
+        </p>
+
+        <form className="access-form" onSubmit={submit}>
+          <label htmlFor="telemetry-access-key">ACCESS KEY</label>
+          <input
+            id="telemetry-access-key"
+            type="password"
+            value={accessKey}
+            onChange={(event) => setAccessKey(event.target.value)}
+            autoComplete="current-password"
+            disabled={submitting}
+          />
+
+          <button type="submit" disabled={submitting || accessKey.length === 0}>
+            {submitting ? "AUTHENTICATING" : "ENTER TELEMETRY"}
+          </button>
+        </form>
+
+        {authenticationError === null ? null : (
+          <p className="access-error" role="alert">
+            {authenticationError}
+          </p>
+        )}
+
+        {sessionError === null ? null : (
+          <p className="access-error" role="alert">
+            {sessionError}
+          </p>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function SessionCheckingScreen() {
+  return (
+    <main className="access-page">
+      <section className="access-panel">
+        <p className="eyebrow">B-52 OBSERVATION SURFACE</p>
+        <h1>B-52 TELEMETRY</h1>
+        <p className="subtitle">Verifying observation access.</p>
+      </section>
+    </main>
+  );
+}
+
+function TelemetrySurface({ onLogout }: { onLogout: () => void }) {
   const [telemetry, setTelemetry] = useState<TelemetryPayload | null>(null);
   const [connection, setConnection] =
     useState<ConnectionState>("CONNECTING");
@@ -466,9 +569,15 @@ export function App() {
           <p className="subtitle">Read-only canonical runtime telemetry.</p>
         </div>
 
-        <div className="connection-block">
-          <span className="connection-label">WEBSITE CONNECTION</span>
-          <strong>{connection}</strong>
+        <div className="header-actions">
+          <div className="connection-block">
+            <span className="connection-label">WEBSITE CONNECTION</span>
+            <strong>{connection}</strong>
+          </div>
+
+          <button className="logout-button" type="button" onClick={onLogout}>
+            END SESSION
+          </button>
         </div>
       </header>
 
@@ -490,4 +599,66 @@ export function App() {
       )}
     </main>
   );
+}
+
+export function App() {
+  const [authentication, setAuthentication] =
+    useState<AuthenticationState>("CHECKING");
+  const [sessionError, setSessionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    void fetchSessionStatus()
+      .then((session) => {
+        if (!active) {
+          return;
+        }
+
+        setAuthentication(
+          session.authenticated ? "AUTHENTICATED" : "UNAUTHENTICATED",
+        );
+      })
+      .catch(() => {
+        if (active) {
+          setSessionError("Unable to verify an existing telemetry session.");
+          setAuthentication("UNAUTHENTICATED");
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  function authenticated() {
+    setSessionError(null);
+    setAuthentication("AUTHENTICATED");
+  }
+
+  function logout() {
+    setAuthentication("UNAUTHENTICATED");
+    setSessionError(null);
+
+    void deleteSession().catch(() => {
+      setSessionError(
+        "Telemetry was closed locally, but server logout could not be confirmed.",
+      );
+    });
+  }
+
+  if (authentication === "CHECKING") {
+    return <SessionCheckingScreen />;
+  }
+
+  if (authentication === "UNAUTHENTICATED") {
+    return (
+      <AccessScreen
+        sessionError={sessionError}
+        onAuthenticated={authenticated}
+      />
+    );
+  }
+
+  return <TelemetrySurface onLogout={logout} />;
 }
