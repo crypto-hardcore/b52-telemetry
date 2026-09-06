@@ -9,6 +9,10 @@ from fastapi import FastAPI, HTTPException
 from starlette.responses import StreamingResponse
 
 from b52_telemetry.contract import TelemetryPayload
+from b52_telemetry.public_projection import (
+    PublicTelemetryPayload,
+    project_public_telemetry,
+)
 from b52_telemetry.source import (
     TelemetryFileSource,
     TelemetrySourceInvalid,
@@ -46,6 +50,26 @@ async def _stream_telemetry(
 def create_app(telemetry_path: Path) -> FastAPI:
     source = TelemetryFileSource(telemetry_path)
     app = FastAPI()
+
+    @app.get(
+        "/api/public/snapshot",
+        response_model=None,
+    )
+    def public_snapshot() -> PublicTelemetryPayload:
+        try:
+            telemetry = source.read()
+        except TelemetrySourceUnavailable as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="telemetry source unavailable",
+            ) from exc
+        except TelemetrySourceInvalid as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="telemetry source invalid",
+            ) from exc
+
+        return project_public_telemetry(telemetry)
 
     @app.get(
         "/api/telemetry/latest",

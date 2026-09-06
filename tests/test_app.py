@@ -253,3 +253,66 @@ def test_stream_closes_if_source_becomes_invalid(
 
     assert response.status_code == 200
     assert response.text.count("\n\n") == 1
+
+
+def test_public_snapshot_returns_only_approved_projection(tmp_path: Path) -> None:
+    path = tmp_path / "telemetry.latest.json"
+    payload = canonical_payload()
+    payload["system"] = {
+        "authentication": {
+            "state": "HEALTHY",
+            "observed_at": "2026-09-06T00:15:02+00:00",
+        },
+    }
+    payload["mission"] = {
+        "lifecycle": {
+            "lifecycle_id": "private-lifecycle-id",
+            "beginning_wallet_balance": "5000.00",
+        },
+    }
+    payload["future_b52_field"] = {
+        "private": "authoritative-but-not-public",
+    }
+    write_payload(path, payload)
+
+    client = TestClient(create_app(path))
+
+    response = client.get("/api/public/snapshot")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "generated_at": payload["generated_at"],
+        "market": {
+            "symbol": "BTCUSDC",
+            "price": "79508.10",
+        },
+    }
+
+
+def test_public_snapshot_returns_503_when_source_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "telemetry.latest.json"
+    client = TestClient(create_app(path))
+
+    response = client.get("/api/public/snapshot")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "telemetry source unavailable",
+    }
+
+
+def test_public_snapshot_returns_503_when_source_is_invalid(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "telemetry.latest.json"
+    path.write_text('{"schema_version":3', encoding="utf-8")
+    client = TestClient(create_app(path))
+
+    response = client.get("/api/public/snapshot")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "telemetry source invalid",
+    }
