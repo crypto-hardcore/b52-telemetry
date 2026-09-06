@@ -15,3 +15,8 @@ build/
 .vscode/
 .idea/
 .DS_Store
+
+# Web presentation
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
