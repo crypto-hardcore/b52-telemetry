@@ -594,6 +594,14 @@ def test_delete_session_revokes_authenticated_session(tmp_path: Path) -> None:
     assert response.json() == {"authenticated": False}
     assert not store.contains(session_id)
 
+    set_cookie = response.headers["set-cookie"]
+    assert "b52_telemetry_session=" in set_cookie
+    assert "Max-Age=0" in set_cookie
+    assert "Path=/" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "Secure" in set_cookie
+    assert "SameSite=strict" in set_cookie
+
 
 def test_authenticated_cookie_grants_latest_telemetry(tmp_path: Path) -> None:
     from b52_telemetry.authorization import SessionTelemetryAuthorizer

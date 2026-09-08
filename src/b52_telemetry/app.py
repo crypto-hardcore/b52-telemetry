@@ -147,6 +147,9 @@ def create_app(
         response.delete_cookie(
             key=TELEMETRY_SESSION_COOKIE_NAME,
             path="/",
+            secure=True,
+            httponly=True,
+            samesite="strict",
         )
 
         return {"authenticated": False}
