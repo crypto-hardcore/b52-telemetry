@@ -806,3 +806,68 @@ def test_unknown_instance_is_authorized_before_resolution(
 
     assert response.status_code == 404
     assert authorization_calls == 1
+
+
+def test_authenticated_instance_discovery_returns_registered_instances(
+    tmp_path: Path,
+) -> None:
+    from b52_telemetry.authorization import SessionTelemetryAuthorizer
+    from b52_telemetry.session import SessionStore
+
+    first_id = B52InstanceId("B52-001")
+    second_id = B52InstanceId("B52-002")
+    registry = TelemetrySourceRegistry(
+        {
+            first_id: tmp_path / "first.json",
+            second_id: tmp_path / "second.json",
+        }
+    )
+    store = SessionStore()
+
+    client = create_https_client(
+        create_app(
+            registry,
+            telemetry_authorizer=SessionTelemetryAuthorizer(store),
+            session_store=store,
+            telemetry_access_key="test-access-key",
+        )
+    )
+
+    login_response = client.post(
+        "/api/session",
+        json={"access_key": "test-access-key"},
+    )
+
+    assert login_response.status_code == 200
+
+    response = client.get("/api/telemetry/instances")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "instances": ["B52-001", "B52-002"],
+    }
+
+
+def test_instance_discovery_requires_authenticated_session(
+    tmp_path: Path,
+) -> None:
+    from b52_telemetry.authorization import SessionTelemetryAuthorizer
+    from b52_telemetry.session import SessionStore
+
+    store = SessionStore()
+
+    client = create_https_client(
+        create_app(
+            create_registry(tmp_path / "telemetry.json"),
+            telemetry_authorizer=SessionTelemetryAuthorizer(store),
+            session_store=store,
+            telemetry_access_key="test-access-key",
+        )
+    )
+
+    response = client.get("/api/telemetry/instances")
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "telemetry authentication required",
+    }

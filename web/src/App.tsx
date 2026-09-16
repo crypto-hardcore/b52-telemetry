@@ -8,6 +8,7 @@ import {
 } from "./sessionClient";
 import {
   fetchLatestTelemetry,
+  fetchTelemetryInstances,
   subscribeTelemetry,
   type TelemetryPayload,
   type TelemetrySubscription,
@@ -511,7 +512,13 @@ function SessionCheckingScreen() {
   );
 }
 
-function TelemetrySurface({ onLogout }: { onLogout: () => void }) {
+function TelemetrySurface({
+  instanceId,
+  onLogout,
+}: {
+  instanceId: string;
+  onLogout: () => void;
+}) {
   const [telemetry, setTelemetry] = useState<TelemetryPayload | null>(null);
   const [connection, setConnection] =
     useState<ConnectionState>("CONNECTING");
@@ -521,7 +528,7 @@ function TelemetrySurface({ onLogout }: { onLogout: () => void }) {
     let streamReceived = false;
     let subscription: TelemetrySubscription | null = null;
 
-    void fetchLatestTelemetry()
+    void fetchLatestTelemetry(instanceId)
       .then((payload) => {
         if (active && !streamReceived) {
           setTelemetry(payload);
@@ -534,6 +541,7 @@ function TelemetrySurface({ onLogout }: { onLogout: () => void }) {
       });
 
     subscription = subscribeTelemetry(
+      instanceId,
       (payload) => {
         if (!active) {
           return;
@@ -554,7 +562,7 @@ function TelemetrySurface({ onLogout }: { onLogout: () => void }) {
       active = false;
       subscription?.close();
     };
-  }, []);
+  }, [instanceId]);
 
   const system = telemetry === null ? null : telemetry.system;
   const market = telemetry === null ? null : telemetry.market;
@@ -588,6 +596,7 @@ function TelemetrySurface({ onLogout }: { onLogout: () => void }) {
       ) : (
         <>
           <section className="snapshot-meta">
+            <Field label="B-52 INSTANCE" value={instanceId} />
             <Field label="SCHEMA VERSION" value={telemetry.schema_version} />
             <Field label="GENERATED AT" value={telemetry.generated_at} />
           </section>
@@ -598,6 +607,101 @@ function TelemetrySurface({ onLogout }: { onLogout: () => void }) {
         </>
       )}
     </main>
+  );
+}
+
+function InstanceSurface({ onLogout }: { onLogout: () => void }) {
+  const [instanceIds, setInstanceIds] = useState<string[] | null>(null);
+  const [activeInstanceId, setActiveInstanceId] = useState<string | null>(null);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    void fetchTelemetryInstances()
+      .then((instances) => {
+        if (!active) {
+          return;
+        }
+
+        setInstanceIds(instances);
+        setActiveInstanceId(instances[0] ?? null);
+      })
+      .catch(() => {
+        if (active) {
+          setDiscoveryError("Unable to discover registered B-52 instances.");
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (discoveryError !== null) {
+    return (
+      <main className="access-page">
+        <section className="access-panel">
+          <p className="eyebrow">B-52 OBSERVATION SURFACE</p>
+          <h1>B-52 TELEMETRY</h1>
+          <p className="access-error" role="alert">
+            {discoveryError}
+          </p>
+          <button className="logout-button" type="button" onClick={onLogout}>
+            END SESSION
+          </button>
+        </section>
+      </main>
+    );
+  }
+
+  if (instanceIds === null) {
+    return (
+      <main className="access-page">
+        <section className="access-panel">
+          <p className="eyebrow">B-52 OBSERVATION SURFACE</p>
+          <h1>B-52 TELEMETRY</h1>
+          <p className="subtitle">Discovering registered B-52 instances.</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (instanceIds.length === 0 || activeInstanceId === null) {
+    return (
+      <main className="access-page">
+        <section className="access-panel">
+          <p className="eyebrow">B-52 OBSERVATION SURFACE</p>
+          <h1>B-52 TELEMETRY</h1>
+          <p className="empty">No B-52 telemetry instances are registered.</p>
+          <button className="logout-button" type="button" onClick={onLogout}>
+            END SESSION
+          </button>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <>
+      <nav className="instance-selector" aria-label="B-52 instance selection">
+        {instanceIds.map((instanceId) => (
+          <button
+            key={instanceId}
+            type="button"
+            onClick={() => setActiveInstanceId(instanceId)}
+            disabled={instanceId === activeInstanceId}
+          >
+            {instanceId}
+          </button>
+        ))}
+      </nav>
+
+      <TelemetrySurface
+        instanceId={activeInstanceId}
+        onLogout={onLogout}
+      />
+    </>
   );
 }
 
@@ -660,5 +764,5 @@ export function App() {
     );
   }
 
-  return <TelemetrySurface onLogout={logout} />;
+  return <InstanceSurface onLogout={logout} />;
 }

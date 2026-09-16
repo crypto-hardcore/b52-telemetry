@@ -183,6 +183,17 @@ def create_app(
         return {"authenticated": False}
 
     @app.get(
+        "/api/telemetry/instances",
+        dependencies=[Depends(telemetry_authorizer)],
+    )
+    def telemetry_instances() -> dict[str, list[str]]:
+        return {
+            "instances": [
+                instance_id.value for instance_id in telemetry_sources.instance_ids()
+            ]
+        }
+
+    @app.get(
         "/api/telemetry/instances/{instance_id}/latest",
         response_model=None,
         dependencies=[Depends(telemetry_authorizer)],
