@@ -9,14 +9,25 @@ from fastapi.testclient import TestClient
 
 from b52_telemetry.app import create_app
 from b52_telemetry.contract import TELEMETRY_SCHEMA_VERSION, TelemetryPayload
+from b52_telemetry.source_registry import B52InstanceId, TelemetrySourceRegistry
+
+TEST_INSTANCE_ID = B52InstanceId("B52-001")
+TEST_INSTANCE = TEST_INSTANCE_ID.value
 
 
 def allow_telemetry_access(_: Request) -> None:
     return None
 
 
+def create_registry(path: Path) -> TelemetrySourceRegistry:
+    return TelemetrySourceRegistry({TEST_INSTANCE_ID: path})
+
+
 def create_test_app(path: Path) -> FastAPI:
-    return create_app(path, telemetry_authorizer=allow_telemetry_access)
+    return create_app(
+        create_registry(path),
+        telemetry_authorizer=allow_telemetry_access,
+    )
 
 
 def canonical_payload() -> dict[str, object]:
@@ -80,7 +91,7 @@ def test_latest_returns_canonical_payload_unchanged(tmp_path: Path) -> None:
 
     client = TestClient(create_test_app(path))
 
-    response = client.get("/api/telemetry/latest")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/latest")
 
     assert response.status_code == 200
     assert response.json() == payload
@@ -90,7 +101,7 @@ def test_latest_returns_503_when_source_is_unavailable(tmp_path: Path) -> None:
     path = tmp_path / "telemetry.latest.json"
     client = TestClient(create_test_app(path))
 
-    response = client.get("/api/telemetry/latest")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/latest")
 
     assert response.status_code == 503
     assert response.json() == {
@@ -105,7 +116,7 @@ def test_latest_returns_503_when_source_contains_invalid_json(
     path.write_text('{"schema_version":3', encoding="utf-8")
     client = TestClient(create_test_app(path))
 
-    response = client.get("/api/telemetry/latest")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/latest")
 
     assert response.status_code == 503
     assert response.json() == {
@@ -120,7 +131,7 @@ def test_latest_returns_503_for_unsupported_schema(tmp_path: Path) -> None:
     write_payload(path, payload)
     client = TestClient(create_test_app(path))
 
-    response = client.get("/api/telemetry/latest")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/latest")
 
     assert response.status_code == 503
     assert response.json() == {
@@ -135,7 +146,7 @@ def test_latest_does_not_reject_old_canonical_snapshot(tmp_path: Path) -> None:
     write_payload(path, payload)
     client = TestClient(create_test_app(path))
 
-    response = client.get("/api/telemetry/latest")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/latest")
 
     assert response.status_code == 200
     assert response.json()["generated_at"] == "2025-01-01T00:00:00+00:00"
@@ -181,7 +192,7 @@ def test_stream_returns_canonical_payload_as_sse(
 
     client = TestClient(create_test_app(path))
 
-    response = client.get("/api/telemetry/stream")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/stream")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
@@ -201,7 +212,7 @@ def test_stream_returns_503_when_source_is_unavailable(tmp_path: Path) -> None:
     path = tmp_path / "telemetry.latest.json"
     client = TestClient(create_test_app(path))
 
-    response = client.get("/api/telemetry/stream")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/stream")
 
     assert response.status_code == 503
     assert response.json() == {
@@ -214,7 +225,7 @@ def test_stream_returns_503_when_source_is_invalid(tmp_path: Path) -> None:
     path.write_text('{"schema_version":3', encoding="utf-8")
     client = TestClient(create_test_app(path))
 
-    response = client.get("/api/telemetry/stream")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/stream")
 
     assert response.status_code == 503
     assert response.json() == {
@@ -258,7 +269,7 @@ def test_stream_closes_if_source_becomes_invalid(
 
     client = TestClient(create_test_app(path))
 
-    response = client.get("/api/telemetry/stream")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/stream")
 
     assert response.status_code == 200
     assert response.text.count("\n\n") == 1
@@ -286,7 +297,7 @@ def test_public_snapshot_returns_only_approved_projection(tmp_path: Path) -> Non
 
     client = TestClient(create_test_app(path))
 
-    response = client.get("/api/public/snapshot")
+    response = client.get(f"/api/public/instances/{TEST_INSTANCE}/snapshot")
 
     assert response.status_code == 200
     assert response.json() == {
@@ -304,7 +315,7 @@ def test_public_snapshot_returns_503_when_source_is_unavailable(
     path = tmp_path / "telemetry.latest.json"
     client = TestClient(create_test_app(path))
 
-    response = client.get("/api/public/snapshot")
+    response = client.get(f"/api/public/instances/{TEST_INSTANCE}/snapshot")
 
     assert response.status_code == 503
     assert response.json() == {
@@ -319,7 +330,7 @@ def test_public_snapshot_returns_503_when_source_is_invalid(
     path.write_text('{"schema_version":3', encoding="utf-8")
     client = TestClient(create_test_app(path))
 
-    response = client.get("/api/public/snapshot")
+    response = client.get(f"/api/public/instances/{TEST_INSTANCE}/snapshot")
 
     assert response.status_code == 503
     assert response.json() == {
@@ -343,12 +354,12 @@ def test_public_snapshot_does_not_require_telemetry_authorization(
 
     client = TestClient(
         create_app(
-            path,
+            create_registry(path),
             telemetry_authorizer=deny_if_called,
         )
     )
 
-    response = client.get("/api/public/snapshot")
+    response = client.get(f"/api/public/instances/{TEST_INSTANCE}/snapshot")
 
     assert response.status_code == 200
     assert authorization_calls == 0
@@ -360,9 +371,9 @@ def test_latest_telemetry_denies_access_by_default(
     path = tmp_path / "telemetry.latest.json"
     write_payload(path, canonical_payload())
 
-    client = TestClient(create_app(path))
+    client = TestClient(create_app(create_registry(path)))
 
-    response = client.get("/api/telemetry/latest")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/latest")
 
     assert response.status_code == 403
     assert response.json() == {
@@ -376,9 +387,9 @@ def test_stream_telemetry_denies_access_by_default(
     path = tmp_path / "telemetry.latest.json"
     write_payload(path, canonical_payload())
 
-    client = TestClient(create_app(path))
+    client = TestClient(create_app(create_registry(path)))
 
-    response = client.get("/api/telemetry/stream")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/stream")
 
     assert response.status_code == 403
     assert response.json() == {
@@ -401,12 +412,12 @@ def test_latest_telemetry_invokes_authorizer_before_returning_payload(
 
     client = TestClient(
         create_app(
-            path,
+            create_registry(path),
             telemetry_authorizer=authorize,
         )
     )
 
-    response = client.get("/api/telemetry/latest")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/latest")
 
     assert response.status_code == 200
     assert response.json() == payload
@@ -437,12 +448,12 @@ def test_stream_telemetry_invokes_authorizer_before_opening_stream(
 
     client = TestClient(
         create_app(
-            path,
+            create_registry(path),
             telemetry_authorizer=authorize,
         )
     )
 
-    response = client.get("/api/telemetry/stream")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/stream")
 
     assert response.status_code == 200
     assert response.text.count("\n\n") == 1
@@ -462,7 +473,7 @@ def test_session_creation_accepts_valid_access_key(tmp_path: Path) -> None:
 
     client = create_https_client(
         create_app(
-            path,
+            create_registry(path),
             telemetry_authorizer=SessionTelemetryAuthorizer(store),
             session_store=store,
             telemetry_access_key="expected-access-key",
@@ -486,7 +497,7 @@ def test_session_creation_rejects_invalid_access_key(tmp_path: Path) -> None:
 
     client = create_https_client(
         create_app(
-            path,
+            create_registry(path),
             session_store=SessionStore(),
             telemetry_access_key="expected-access-key",
         )
@@ -507,7 +518,7 @@ def test_session_creation_is_unavailable_without_session_configuration(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "telemetry.latest.json"
-    client = create_https_client(create_app(path))
+    client = create_https_client(create_app(create_registry(path)))
 
     response = client.post(
         "/api/session",
@@ -528,7 +539,7 @@ def test_session_status_reports_authenticated_session(tmp_path: Path) -> None:
 
     client = create_https_client(
         create_app(
-            path,
+            create_registry(path),
             session_store=store,
             telemetry_access_key="expected-access-key",
         )
@@ -556,7 +567,7 @@ def test_session_status_reports_unauthenticated_without_valid_session(
 
     client = create_https_client(
         create_app(
-            path,
+            create_registry(path),
             session_store=SessionStore(),
             telemetry_access_key="expected-access-key",
         )
@@ -576,7 +587,7 @@ def test_delete_session_revokes_authenticated_session(tmp_path: Path) -> None:
 
     client = create_https_client(
         create_app(
-            path,
+            create_registry(path),
             session_store=store,
             telemetry_access_key="expected-access-key",
         )
@@ -615,7 +626,7 @@ def test_authenticated_cookie_grants_latest_telemetry(tmp_path: Path) -> None:
 
     client = create_https_client(
         create_app(
-            path,
+            create_registry(path),
             telemetry_authorizer=SessionTelemetryAuthorizer(store),
             session_store=store,
             telemetry_access_key="expected-access-key",
@@ -629,7 +640,7 @@ def test_authenticated_cookie_grants_latest_telemetry(tmp_path: Path) -> None:
 
     assert "b52_telemetry_session" in login_response.cookies
 
-    response = client.get("/api/telemetry/latest")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/latest")
 
     assert response.status_code == 200
     assert response.json() == payload
@@ -648,14 +659,14 @@ def test_missing_session_cookie_is_rejected_by_session_authorizer(
 
     client = create_https_client(
         create_app(
-            path,
+            create_registry(path),
             telemetry_authorizer=SessionTelemetryAuthorizer(store),
             session_store=store,
             telemetry_access_key="expected-access-key",
         )
     )
 
-    response = client.get("/api/telemetry/latest")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/latest")
 
     assert response.status_code == 401
     assert response.json() == {
@@ -686,7 +697,7 @@ def test_authenticated_cookie_grants_telemetry_stream(
 
     client = create_https_client(
         create_app(
-            path,
+            create_registry(path),
             telemetry_authorizer=SessionTelemetryAuthorizer(store),
             session_store=store,
             telemetry_access_key="expected-access-key",
@@ -701,8 +712,97 @@ def test_authenticated_cookie_grants_telemetry_stream(
     assert login_response.status_code == 200
     assert "b52_telemetry_session" in login_response.cookies
 
-    response = client.get("/api/telemetry/stream")
+    response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/stream")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert response.text.count("\n\n") == 1
+
+
+def test_latest_resolves_requested_instance_independently(tmp_path: Path) -> None:
+    first_path = tmp_path / "first.json"
+    second_path = tmp_path / "second.json"
+
+    first_payload = canonical_payload()
+    first_payload["generated_at"] = "2026-09-16T10:00:00+00:00"
+
+    second_payload = canonical_payload()
+    second_payload["generated_at"] = "2026-09-16T10:00:01+00:00"
+
+    write_payload(first_path, first_payload)
+    write_payload(second_path, second_payload)
+
+    registry = TelemetrySourceRegistry(
+        {
+            B52InstanceId("B52-001"): first_path,
+            B52InstanceId("B52-002"): second_path,
+        }
+    )
+
+    client = TestClient(
+        create_app(
+            registry,
+            telemetry_authorizer=allow_telemetry_access,
+        )
+    )
+
+    first_response = client.get("/api/telemetry/instances/B52-001/latest")
+    second_response = client.get("/api/telemetry/instances/B52-002/latest")
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_response.json() == first_payload
+    assert second_response.json() == second_payload
+
+
+def test_unknown_instance_returns_404(tmp_path: Path) -> None:
+    path = tmp_path / "telemetry.latest.json"
+    write_payload(path, canonical_payload())
+
+    client = TestClient(create_test_app(path))
+
+    response = client.get("/api/telemetry/instances/B52-999/latest")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": "B-52 telemetry source not found",
+    }
+
+
+def test_public_unknown_instance_returns_404(tmp_path: Path) -> None:
+    path = tmp_path / "telemetry.latest.json"
+    write_payload(path, canonical_payload())
+
+    client = TestClient(create_test_app(path))
+
+    response = client.get("/api/public/instances/B52-999/snapshot")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": "B-52 telemetry source not found",
+    }
+
+
+def test_unknown_instance_is_authorized_before_resolution(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "telemetry.latest.json"
+    write_payload(path, canonical_payload())
+
+    authorization_calls = 0
+
+    def authorize(_: Request) -> None:
+        nonlocal authorization_calls
+        authorization_calls += 1
+
+    client = TestClient(
+        create_app(
+            create_registry(path),
+            telemetry_authorizer=authorize,
+        )
+    )
+
+    response = client.get("/api/telemetry/instances/B52-999/latest")
+
+    assert response.status_code == 404
+    assert authorization_calls == 1

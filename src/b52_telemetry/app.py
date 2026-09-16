@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from asyncio import sleep as async_sleep
 from collections.abc import AsyncIterator
-from pathlib import Path
 from secrets import compare_digest
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -25,6 +24,11 @@ from b52_telemetry.source import (
     TelemetryFileSource,
     TelemetrySourceInvalid,
     TelemetrySourceUnavailable,
+)
+from b52_telemetry.source_registry import (
+    B52InstanceId,
+    TelemetrySourceRegistry,
+    UnknownTelemetrySource,
 )
 
 TELEMETRY_STREAM_INTERVAL_SECONDS = 1.0
@@ -59,33 +63,57 @@ async def _stream_telemetry(
             return
 
 
+def _resolve_source(
+    registry: TelemetrySourceRegistry,
+    instance_id: str,
+) -> TelemetryFileSource:
+    try:
+        identity = B52InstanceId(instance_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="B-52 telemetry source not found",
+        ) from exc
+
+    try:
+        return registry.resolve(identity)
+    except UnknownTelemetrySource as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="B-52 telemetry source not found",
+        ) from exc
+
+
+def _read_source(source: TelemetryFileSource) -> TelemetryPayload:
+    try:
+        return source.read()
+    except TelemetrySourceUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="telemetry source unavailable",
+        ) from exc
+    except TelemetrySourceInvalid as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="telemetry source invalid",
+        ) from exc
+
+
 def create_app(
-    telemetry_path: Path,
+    telemetry_sources: TelemetrySourceRegistry,
     telemetry_authorizer: TelemetryAuthorizer = deny_telemetry_access,
     session_store: SessionStore | None = None,
     telemetry_access_key: str | None = None,
 ) -> FastAPI:
-    source = TelemetryFileSource(telemetry_path)
     app = FastAPI()
 
     @app.get(
-        "/api/public/snapshot",
+        "/api/public/instances/{instance_id}/snapshot",
         response_model=None,
     )
-    def public_snapshot() -> PublicTelemetryPayload:
-        try:
-            telemetry = source.read()
-        except TelemetrySourceUnavailable as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="telemetry source unavailable",
-            ) from exc
-        except TelemetrySourceInvalid as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="telemetry source invalid",
-            ) from exc
-
+    def public_snapshot(instance_id: str) -> PublicTelemetryPayload:
+        source = _resolve_source(telemetry_sources, instance_id)
+        telemetry = _read_source(source)
         return project_public_telemetry(telemetry)
 
     @app.post("/api/session")
@@ -155,42 +183,22 @@ def create_app(
         return {"authenticated": False}
 
     @app.get(
-        "/api/telemetry/latest",
+        "/api/telemetry/instances/{instance_id}/latest",
         response_model=None,
         dependencies=[Depends(telemetry_authorizer)],
     )
-    def latest_telemetry() -> TelemetryPayload:
-        try:
-            return source.read()
-        except TelemetrySourceUnavailable as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="telemetry source unavailable",
-            ) from exc
-        except TelemetrySourceInvalid as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="telemetry source invalid",
-            ) from exc
+    def latest_telemetry(instance_id: str) -> TelemetryPayload:
+        source = _resolve_source(telemetry_sources, instance_id)
+        return _read_source(source)
 
     @app.get(
-        "/api/telemetry/stream",
+        "/api/telemetry/instances/{instance_id}/stream",
         response_model=None,
         dependencies=[Depends(telemetry_authorizer)],
     )
-    def stream_telemetry() -> StreamingResponse:
-        try:
-            initial_payload = source.read()
-        except TelemetrySourceUnavailable as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="telemetry source unavailable",
-            ) from exc
-        except TelemetrySourceInvalid as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="telemetry source invalid",
-            ) from exc
+    def stream_telemetry(instance_id: str) -> StreamingResponse:
+        source = _resolve_source(telemetry_sources, instance_id)
+        initial_payload = _read_source(source)
 
         return StreamingResponse(
             _stream_telemetry(source, initial_payload),

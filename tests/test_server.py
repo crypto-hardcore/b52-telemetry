@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import uvicorn
+
 from b52_telemetry import server
 
 
@@ -12,7 +14,7 @@ def test_production_server_binds_only_to_loopback(monkeypatch: Any) -> None:
         invocation["app"] = app
         invocation.update(kwargs)
 
-    monkeypatch.setattr(server.uvicorn, "run", fake_run)
+    monkeypatch.setattr(uvicorn, "run", fake_run)
 
     server.main()
 
