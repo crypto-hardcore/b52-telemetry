@@ -7,9 +7,10 @@ import {
   fetchSessionStatus,
 } from "./sessionClient";
 import {
+  fetchFleetTelemetry,
   fetchLatestTelemetry,
-  fetchTelemetryInstances,
   subscribeTelemetry,
+  type FleetMember,
   type TelemetryPayload,
   type TelemetrySubscription,
 } from "./telemetryClient";
@@ -514,9 +515,11 @@ function SessionCheckingScreen() {
 
 function TelemetrySurface({
   instanceId,
+  onBackToFleet,
   onLogout,
 }: {
   instanceId: string;
+  onBackToFleet: () => void;
   onLogout: () => void;
 }) {
   const [telemetry, setTelemetry] = useState<TelemetryPayload | null>(null);
@@ -578,6 +581,14 @@ function TelemetrySurface({
         </div>
 
         <div className="header-actions">
+          <button
+            className="fleet-return-button"
+            type="button"
+            onClick={onBackToFleet}
+          >
+            BACK TO FLEET
+          </button>
+
           <div className="connection-block">
             <span className="connection-label">WEBSITE CONNECTION</span>
             <strong>{connection}</strong>
@@ -610,98 +621,159 @@ function TelemetrySurface({
   );
 }
 
-function InstanceSurface({ onLogout }: { onLogout: () => void }) {
-  const [instanceIds, setInstanceIds] = useState<string[] | null>(null);
-  const [activeInstanceId, setActiveInstanceId] = useState<string | null>(null);
-  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+function FleetMemberCard({
+  member,
+  onOpen,
+}: {
+  member: FleetMember;
+  onOpen: (instanceId: string) => void;
+}) {
+  const telemetry = member.telemetry;
+  const system = telemetry === null ? null : asObject(telemetry.system);
+  const market = telemetry === null ? null : asObject(telemetry.market);
+  const mission = telemetry === null ? null : asObject(telemetry.mission);
+  const lifecycle = mission === null ? null : asObject(mission.lifecycle);
+  const tradeStatus = mission === null ? null : asObject(mission.trade_status);
+  const position = mission === null ? null : asObject(mission.position);
+  const risk = mission === null ? null : asObject(mission.risk);
+
+  const available = member.source_state === "AVAILABLE";
+
+  return (
+    <article className="fleet-member">
+      <header className="fleet-member-header">
+        <div>
+          <span className="fleet-member-label">B-52 INSTANCE</span>
+          <h2>{member.instance_id}</h2>
+        </div>
+        <strong className="fleet-source-state">{member.source_state}</strong>
+      </header>
+
+      {available ? (
+        <div className="fleet-member-facts">
+          <Field label="GENERATED AT" value={telemetry?.generated_at} />
+          <Field label="SYMBOL" value={market?.symbol} />
+          <Field label="MARKET PRICE" value={market?.price} />
+          <Field label="LIFECYCLE" value={lifecycle?.state} />
+          <Field
+            label="TRADE STATUS"
+            value={tradeStatus?.lifecycle_status}
+          />
+          <Field label="POSITION" value={position?.state} />
+          <Field label="RISK HEALTH" value={risk?.health} />
+          <Field
+            label="RECONCILIATION"
+            value={asObject(system?.reconciliation)?.state}
+          />
+        </div>
+      ) : (
+        <p className="fleet-member-unavailable">
+          Canonical telemetry source is {member.source_state.toLowerCase()}.
+        </p>
+      )}
+
+      <footer className="fleet-member-footer">
+        <button
+          type="button"
+          disabled={!available}
+          onClick={() => onOpen(member.instance_id)}
+        >
+          {available ? "OPEN B-52" : member.source_state}
+        </button>
+      </footer>
+    </article>
+  );
+}
+
+function FleetSurface({ onLogout }: { onLogout: () => void }) {
+  const [fleet, setFleet] = useState<FleetMember[] | null>(null);
+  const [selectedInstanceId, setSelectedInstanceId] =
+    useState<string | null>(null);
+  const [fleetError, setFleetError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (selectedInstanceId !== null) {
+      return;
+    }
+
     let active = true;
 
-    void fetchTelemetryInstances()
-      .then((instances) => {
+    void fetchFleetTelemetry()
+      .then((snapshot) => {
         if (!active) {
           return;
         }
 
-        setInstanceIds(instances);
-        setActiveInstanceId(instances[0] ?? null);
+        setFleet(snapshot.instances);
+        setFleetError(null);
       })
       .catch(() => {
         if (active) {
-          setDiscoveryError("Unable to discover registered B-52 instances.");
+          setFleetError("Unable to load canonical B-52 fleet telemetry.");
         }
       });
 
     return () => {
       active = false;
     };
-  }, []);
+  }, [selectedInstanceId]);
 
-  if (discoveryError !== null) {
+  if (selectedInstanceId !== null) {
     return (
-      <main className="access-page">
-        <section className="access-panel">
-          <p className="eyebrow">B-52 OBSERVATION SURFACE</p>
-          <h1>B-52 TELEMETRY</h1>
-          <p className="access-error" role="alert">
-            {discoveryError}
-          </p>
-          <button className="logout-button" type="button" onClick={onLogout}>
-            END SESSION
-          </button>
-        </section>
-      </main>
-    );
-  }
-
-  if (instanceIds === null) {
-    return (
-      <main className="access-page">
-        <section className="access-panel">
-          <p className="eyebrow">B-52 OBSERVATION SURFACE</p>
-          <h1>B-52 TELEMETRY</h1>
-          <p className="subtitle">Discovering registered B-52 instances.</p>
-        </section>
-      </main>
-    );
-  }
-
-  if (instanceIds.length === 0 || activeInstanceId === null) {
-    return (
-      <main className="access-page">
-        <section className="access-panel">
-          <p className="eyebrow">B-52 OBSERVATION SURFACE</p>
-          <h1>B-52 TELEMETRY</h1>
-          <p className="empty">No B-52 telemetry instances are registered.</p>
-          <button className="logout-button" type="button" onClick={onLogout}>
-            END SESSION
-          </button>
-        </section>
-      </main>
+      <TelemetrySurface
+        instanceId={selectedInstanceId}
+        onBackToFleet={() => setSelectedInstanceId(null)}
+        onLogout={onLogout}
+      />
     );
   }
 
   return (
-    <>
-      <nav className="instance-selector" aria-label="B-52 instance selection">
-        {instanceIds.map((instanceId) => (
-          <button
-            key={instanceId}
-            type="button"
-            onClick={() => setActiveInstanceId(instanceId)}
-            disabled={instanceId === activeInstanceId}
-          >
-            {instanceId}
-          </button>
-        ))}
-      </nav>
+    <main className="fleet-page">
+      <header className="page-header">
+        <div>
+          <p className="eyebrow">B-52 OBSERVATION SURFACE</p>
+          <h1>B-52 FLEET</h1>
+          <p className="subtitle">
+            Read-only canonical telemetry across registered B-52 instances.
+          </p>
+        </div>
 
-      <TelemetrySurface
-        instanceId={activeInstanceId}
-        onLogout={onLogout}
-      />
-    </>
+        <div className="header-actions">
+          <button className="logout-button" type="button" onClick={onLogout}>
+            END SESSION
+          </button>
+        </div>
+      </header>
+
+      {fleetError === null ? null : (
+        <section className="panel">
+          <p className="access-error fleet-error" role="alert">
+            {fleetError}
+          </p>
+        </section>
+      )}
+
+      {fleet === null ? (
+        <section className="panel">
+          <p className="empty">Loading canonical fleet telemetry.</p>
+        </section>
+      ) : fleet.length === 0 ? (
+        <section className="panel">
+          <p className="empty">No B-52 telemetry instances are registered.</p>
+        </section>
+      ) : (
+        <section className="fleet-grid" aria-label="B-52 fleet">
+          {fleet.map((member) => (
+            <FleetMemberCard
+              key={member.instance_id}
+              member={member}
+              onOpen={setSelectedInstanceId}
+            />
+          ))}
+        </section>
+      )}
+    </main>
   );
 }
 
@@ -764,5 +836,5 @@ export function App() {
     );
   }
 
-  return <InstanceSurface onLogout={logout} />;
+  return <FleetSurface onLogout={logout} />;
 }

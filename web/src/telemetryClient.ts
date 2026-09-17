@@ -1,5 +1,17 @@
 export type TelemetryPayload = Record<string, unknown>;
 
+export type FleetSourceState = "AVAILABLE" | "UNAVAILABLE" | "INVALID";
+
+export type FleetMember = {
+  instance_id: string;
+  source_state: FleetSourceState;
+  telemetry: TelemetryPayload | null;
+};
+
+export type FleetSnapshot = {
+  instances: FleetMember[];
+};
+
 export type TelemetrySubscription = {
   close: () => void;
 };
@@ -12,35 +24,73 @@ function requireTelemetryObject(value: unknown): TelemetryPayload {
   return value as TelemetryPayload;
 }
 
-function requireTelemetryInstances(value: unknown): string[] {
-  const payload = requireTelemetryObject(value);
-  const instances = payload.instances;
-
+function requireFleetSourceState(value: unknown): FleetSourceState {
   if (
-    !Array.isArray(instances) ||
-    instances.some(
-      (instanceId) =>
-        typeof instanceId !== "string" ||
-        instanceId.length === 0 ||
-        instanceId.trim() !== instanceId,
-    )
+    value !== "AVAILABLE" &&
+    value !== "UNAVAILABLE" &&
+    value !== "INVALID"
   ) {
-    throw new Error("telemetry instances response is invalid");
+    throw new Error("fleet member source state is invalid");
   }
 
-  return instances;
+  return value;
 }
 
-export async function fetchTelemetryInstances(): Promise<string[]> {
-  const response = await fetch("/api/telemetry/instances");
+function requireFleetMember(value: unknown): FleetMember {
+  const member = requireTelemetryObject(value);
+  const instanceId = member.instance_id;
+
+  if (
+    typeof instanceId !== "string" ||
+    instanceId.length === 0 ||
+    instanceId.trim() !== instanceId
+  ) {
+    throw new Error("fleet member instance id is invalid");
+  }
+
+  const sourceState = requireFleetSourceState(member.source_state);
+
+  if (sourceState === "AVAILABLE") {
+    return {
+      instance_id: instanceId,
+      source_state: sourceState,
+      telemetry: requireTelemetryObject(member.telemetry),
+    };
+  }
+
+  if (member.telemetry !== null) {
+    throw new Error("unavailable fleet member telemetry must be null");
+  }
+
+  return {
+    instance_id: instanceId,
+    source_state: sourceState,
+    telemetry: null,
+  };
+}
+
+function requireFleetSnapshot(value: unknown): FleetSnapshot {
+  const payload = requireTelemetryObject(value);
+
+  if (!Array.isArray(payload.instances)) {
+    throw new Error("fleet telemetry response is invalid");
+  }
+
+  return {
+    instances: payload.instances.map(requireFleetMember),
+  };
+}
+
+export async function fetchFleetTelemetry(): Promise<FleetSnapshot> {
+  const response = await fetch("/api/telemetry/fleet");
 
   if (!response.ok) {
     throw new Error(
-      `telemetry instances request failed with status ${response.status}`,
+      `fleet telemetry request failed with status ${response.status}`,
     );
   }
 
-  return requireTelemetryInstances(await response.json());
+  return requireFleetSnapshot(await response.json());
 }
 
 function telemetryInstancePath(instanceId: string): string {
