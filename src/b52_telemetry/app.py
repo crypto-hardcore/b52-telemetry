@@ -15,6 +15,7 @@ from b52_telemetry.authorization import (
     deny_telemetry_access,
 )
 from b52_telemetry.contract import TelemetryPayload
+from b52_telemetry.fleet_projection import FleetSnapshot, project_fleet
 from b52_telemetry.public_projection import (
     PublicTelemetryPayload,
     project_public_telemetry,
@@ -192,6 +193,14 @@ def create_app(
                 instance_id.value for instance_id in telemetry_sources.instance_ids()
             ]
         }
+
+    @app.get(
+        "/api/telemetry/fleet",
+        response_model=None,
+        dependencies=[Depends(telemetry_authorizer)],
+    )
+    def fleet_telemetry() -> FleetSnapshot:
+        return project_fleet(telemetry_sources)
 
     @app.get(
         "/api/telemetry/instances/{instance_id}/latest",

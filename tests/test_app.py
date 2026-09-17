@@ -871,3 +871,155 @@ def test_instance_discovery_requires_authenticated_session(
     assert response.json() == {
         "detail": "telemetry authentication required",
     }
+
+
+def test_fleet_returns_registered_instances_with_independent_source_states(
+    tmp_path: Path,
+) -> None:
+    first_path = tmp_path / "first.json"
+    invalid_path = tmp_path / "invalid.json"
+    missing_path = tmp_path / "missing.json"
+    fourth_path = tmp_path / "fourth.json"
+
+    first_payload = canonical_payload()
+    first_payload["generated_at"] = "2026-09-17T00:00:01+00:00"
+
+    fourth_payload = canonical_payload()
+    fourth_payload["generated_at"] = "2026-09-17T00:00:04+00:00"
+
+    write_payload(first_path, first_payload)
+    invalid_path.write_text('{"schema_version":3', encoding="utf-8")
+    write_payload(fourth_path, fourth_payload)
+
+    registry = TelemetrySourceRegistry(
+        {
+            B52InstanceId("B52-001"): first_path,
+            B52InstanceId("B52-002"): missing_path,
+            B52InstanceId("B52-003"): invalid_path,
+            B52InstanceId("B52-004"): fourth_path,
+        }
+    )
+
+    client = TestClient(
+        create_app(
+            registry,
+            telemetry_authorizer=allow_telemetry_access,
+        )
+    )
+
+    response = client.get("/api/telemetry/fleet")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "instances": [
+            {
+                "instance_id": "B52-001",
+                "source_state": "AVAILABLE",
+                "telemetry": first_payload,
+            },
+            {
+                "instance_id": "B52-002",
+                "source_state": "UNAVAILABLE",
+                "telemetry": None,
+            },
+            {
+                "instance_id": "B52-003",
+                "source_state": "INVALID",
+                "telemetry": None,
+            },
+            {
+                "instance_id": "B52-004",
+                "source_state": "AVAILABLE",
+                "telemetry": fourth_payload,
+            },
+        ]
+    }
+
+
+def test_fleet_preserves_complete_canonical_payload(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "telemetry.json"
+    payload = canonical_payload()
+    payload["future_b52_field"] = {
+        "owned_by": "B-52",
+        "value": "authoritative",
+    }
+    write_payload(path, payload)
+
+    client = TestClient(create_test_app(path))
+
+    response = client.get("/api/telemetry/fleet")
+
+    assert response.status_code == 200
+    assert response.json()["instances"][0] == {
+        "instance_id": TEST_INSTANCE,
+        "source_state": "AVAILABLE",
+        "telemetry": payload,
+    }
+
+
+def test_fleet_requires_authenticated_session(tmp_path: Path) -> None:
+    from b52_telemetry.authorization import SessionTelemetryAuthorizer
+    from b52_telemetry.session import SessionStore
+
+    path = tmp_path / "telemetry.json"
+    write_payload(path, canonical_payload())
+
+    store = SessionStore()
+
+    client = create_https_client(
+        create_app(
+            create_registry(path),
+            telemetry_authorizer=SessionTelemetryAuthorizer(store),
+            session_store=store,
+            telemetry_access_key="test-access-key",
+        )
+    )
+
+    response = client.get("/api/telemetry/fleet")
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "telemetry authentication required",
+    }
+
+
+def test_authenticated_session_grants_fleet_access(tmp_path: Path) -> None:
+    from b52_telemetry.authorization import SessionTelemetryAuthorizer
+    from b52_telemetry.session import SessionStore
+
+    path = tmp_path / "telemetry.json"
+    payload = canonical_payload()
+    write_payload(path, payload)
+
+    store = SessionStore()
+
+    client = create_https_client(
+        create_app(
+            create_registry(path),
+            telemetry_authorizer=SessionTelemetryAuthorizer(store),
+            session_store=store,
+            telemetry_access_key="test-access-key",
+        )
+    )
+
+    login_response = client.post(
+        "/api/session",
+        json={"access_key": "test-access-key"},
+    )
+
+    assert login_response.status_code == 200
+
+    response = client.get("/api/telemetry/fleet")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "instances": [
+            {
+                "instance_id": TEST_INSTANCE,
+                "source_state": "AVAILABLE",
+                "telemetry": payload,
+            }
+        ]
+    }
