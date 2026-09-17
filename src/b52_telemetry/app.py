@@ -39,7 +39,7 @@ class SessionRequest(BaseModel):
     access_key: str
 
 
-def _encode_sse_payload(payload: TelemetryPayload) -> str:
+def _encode_sse_payload(payload: object) -> str:
     serialized = json.dumps(
         payload,
         ensure_ascii=False,
@@ -62,6 +62,18 @@ async def _stream_telemetry(
             payload = source.read()
         except (TelemetrySourceUnavailable, TelemetrySourceInvalid):
             return
+
+
+async def _stream_fleet(
+    registry: TelemetrySourceRegistry,
+    initial_snapshot: FleetSnapshot,
+) -> AsyncIterator[str]:
+    snapshot = initial_snapshot
+
+    while True:
+        yield _encode_sse_payload(snapshot)
+        await async_sleep(TELEMETRY_STREAM_INTERVAL_SECONDS)
+        snapshot = project_fleet(registry)
 
 
 def _resolve_source(
@@ -201,6 +213,22 @@ def create_app(
     )
     def fleet_telemetry() -> FleetSnapshot:
         return project_fleet(telemetry_sources)
+
+    @app.get(
+        "/api/telemetry/fleet/stream",
+        response_model=None,
+        dependencies=[Depends(telemetry_authorizer)],
+    )
+    def stream_fleet_telemetry() -> StreamingResponse:
+        initial_snapshot = project_fleet(telemetry_sources)
+
+        return StreamingResponse(
+            _stream_fleet(telemetry_sources, initial_snapshot),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+            },
+        )
 
     @app.get(
         "/api/telemetry/instances/{instance_id}/latest",

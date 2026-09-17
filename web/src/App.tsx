@@ -9,6 +9,7 @@ import {
 import {
   fetchFleetTelemetry,
   fetchLatestTelemetry,
+  subscribeFleetTelemetry,
   subscribeTelemetry,
   type FleetMember,
   type TelemetryPayload,
@@ -698,23 +699,42 @@ function FleetSurface({ onLogout }: { onLogout: () => void }) {
 
     let active = true;
 
+    let streamReceived = false;
+    let subscription: TelemetrySubscription | null = null;
+
     void fetchFleetTelemetry()
       .then((snapshot) => {
-        if (!active) {
-          return;
+        if (active && !streamReceived) {
+          setFleet(snapshot.instances);
+          setFleetError(null);
         }
-
-        setFleet(snapshot.instances);
-        setFleetError(null);
       })
       .catch(() => {
-        if (active) {
+        if (active && !streamReceived) {
           setFleetError("Unable to load canonical B-52 fleet telemetry.");
         }
       });
 
+    subscription = subscribeFleetTelemetry(
+      (snapshot) => {
+        if (!active) {
+          return;
+        }
+
+        streamReceived = true;
+        setFleet(snapshot.instances);
+        setFleetError(null);
+      },
+      () => {
+        if (active) {
+          setFleetError("Canonical B-52 fleet telemetry stream interrupted.");
+        }
+      },
+    );
+
     return () => {
       active = false;
+      subscription?.close();
     };
   }, [selectedInstanceId]);
 

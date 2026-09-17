@@ -93,6 +93,32 @@ export async function fetchFleetTelemetry(): Promise<FleetSnapshot> {
   return requireFleetSnapshot(await response.json());
 }
 
+export function subscribeFleetTelemetry(
+  onFleet: (snapshot: FleetSnapshot) => void,
+  onError: () => void,
+): TelemetrySubscription {
+  const source = new EventSource("/api/telemetry/fleet/stream");
+
+  source.onmessage = (event) => {
+    try {
+      const snapshot = requireFleetSnapshot(JSON.parse(event.data));
+      onFleet(snapshot);
+    } catch {
+      onError();
+    }
+  };
+
+  source.onerror = () => {
+    onError();
+  };
+
+  return {
+    close: () => {
+      source.close();
+    },
+  };
+}
+
 function telemetryInstancePath(instanceId: string): string {
   if (instanceId.length === 0 || instanceId.trim() !== instanceId) {
     throw new Error(

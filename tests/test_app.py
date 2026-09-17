@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -7,8 +8,9 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from b52_telemetry.app import create_app
+from b52_telemetry.app import _stream_fleet, create_app
 from b52_telemetry.contract import TELEMETRY_SCHEMA_VERSION, TelemetryPayload
+from b52_telemetry.fleet_projection import project_fleet
 from b52_telemetry.source_registry import B52InstanceId, TelemetrySourceRegistry
 
 TEST_INSTANCE_ID = B52InstanceId("B52-001")
@@ -1022,4 +1024,152 @@ def test_authenticated_session_grants_fleet_access(tmp_path: Path) -> None:
                 "telemetry": payload,
             }
         ]
+    }
+
+
+def test_fleet_stream_returns_initial_complete_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_path = tmp_path / "first.json"
+    missing_path = tmp_path / "missing.json"
+
+    first_payload = canonical_payload()
+    write_payload(first_path, first_payload)
+
+    registry = TelemetrySourceRegistry(
+        {
+            B52InstanceId("B52-001"): first_path,
+            B52InstanceId("B52-002"): missing_path,
+        }
+    )
+
+    initial_snapshot = project_fleet(registry)
+
+    async def exercise() -> str:
+        stream = _stream_fleet(registry, initial_snapshot)
+        return await anext(stream)
+
+    frame = asyncio.run(exercise())
+
+    assert json.loads(frame.removeprefix("data:")) == initial_snapshot
+
+
+def test_fleet_stream_reprojects_registered_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "telemetry.json"
+
+    first_payload = canonical_payload()
+    first_payload["generated_at"] = "2026-09-17T00:00:01+00:00"
+    write_payload(path, first_payload)
+
+    registry = TelemetrySourceRegistry(
+        {
+            B52InstanceId("B52-001"): path,
+        }
+    )
+
+    initial_snapshot = project_fleet(registry)
+
+    second_payload = canonical_payload()
+    second_payload["generated_at"] = "2026-09-17T00:00:02+00:00"
+
+    async def update_source(_: float) -> None:
+        write_payload(path, second_payload)
+
+    monkeypatch.setattr(
+        "b52_telemetry.app.async_sleep",
+        update_source,
+    )
+
+    async def exercise() -> tuple[str, str]:
+        stream = _stream_fleet(registry, initial_snapshot)
+        first_frame = await anext(stream)
+        second_frame = await anext(stream)
+        return first_frame, second_frame
+
+    first_frame, second_frame = asyncio.run(exercise())
+
+    assert json.loads(first_frame.removeprefix("data:")) == initial_snapshot
+    assert json.loads(second_frame.removeprefix("data:")) == {
+        "instances": [
+            {
+                "instance_id": "B52-001",
+                "source_state": "AVAILABLE",
+                "telemetry": second_payload,
+            }
+        ]
+    }
+
+
+def test_fleet_stream_preserves_unavailable_member_and_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "telemetry.json"
+
+    payload = canonical_payload()
+    write_payload(path, payload)
+
+    registry = TelemetrySourceRegistry(
+        {
+            B52InstanceId("B52-001"): path,
+        }
+    )
+
+    initial_snapshot = project_fleet(registry)
+
+    async def make_source_unavailable(_: float) -> None:
+        path.unlink(missing_ok=True)
+
+    monkeypatch.setattr(
+        "b52_telemetry.app.async_sleep",
+        make_source_unavailable,
+    )
+
+    async def exercise() -> tuple[str, str]:
+        stream = _stream_fleet(registry, initial_snapshot)
+        first_frame = await anext(stream)
+        second_frame = await anext(stream)
+        return first_frame, second_frame
+
+    first_frame, second_frame = asyncio.run(exercise())
+
+    assert json.loads(first_frame.removeprefix("data:")) == initial_snapshot
+    assert json.loads(second_frame.removeprefix("data:")) == {
+        "instances": [
+            {
+                "instance_id": "B52-001",
+                "source_state": "UNAVAILABLE",
+                "telemetry": None,
+            }
+        ]
+    }
+
+
+def test_fleet_stream_requires_authenticated_session(tmp_path: Path) -> None:
+    from b52_telemetry.authorization import SessionTelemetryAuthorizer
+    from b52_telemetry.session import SessionStore
+
+    path = tmp_path / "telemetry.json"
+    write_payload(path, canonical_payload())
+
+    store = SessionStore()
+
+    client = create_https_client(
+        create_app(
+            create_registry(path),
+            telemetry_authorizer=SessionTelemetryAuthorizer(store),
+            session_store=store,
+            telemetry_access_key="test-access-key",
+        )
+    )
+
+    response = client.get("/api/telemetry/fleet/stream")
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "telemetry authentication required",
     }
