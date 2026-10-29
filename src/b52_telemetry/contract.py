@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Final, TypeAlias, cast
 
-TELEMETRY_SCHEMA_VERSION: Final = 3
+TELEMETRY_SCHEMA_VERSION: Final = 10
 
 JsonScalar: TypeAlias = None | bool | int | float | str
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
@@ -33,6 +33,28 @@ def validate_telemetry_payload(payload: object) -> TelemetryPayload:
     generated_at = payload.get("generated_at")
     if not isinstance(generated_at, str) or not generated_at:
         raise TelemetryContractError("generated_at must be a non-empty string")
+
+    instance = payload.get("instance")
+    if not isinstance(instance, str) or not instance:
+        raise TelemetryContractError("instance must be a non-empty string")
+
+    environment = payload.get("environment")
+    if not isinstance(environment, str) or not environment:
+        raise TelemetryContractError("environment must be a non-empty string")
+
+    position_sizing_leverage = payload.get("position_sizing_leverage")
+    if (
+        isinstance(position_sizing_leverage, bool)
+        or not isinstance(position_sizing_leverage, int)
+        or position_sizing_leverage < 1
+    ):
+        raise TelemetryContractError(
+            "position_sizing_leverage must be a positive integer"
+        )
+
+    phase = payload.get("phase")
+    if not isinstance(phase, str) or not phase:
+        raise TelemetryContractError("phase must be a non-empty string")
 
     system = payload.get("system")
     if not isinstance(system, dict):

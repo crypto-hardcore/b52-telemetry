@@ -5,7 +5,9 @@ from pathlib import Path
 
 from b52_telemetry.contract import TELEMETRY_SCHEMA_VERSION
 from b52_telemetry.fleet_projection import project_fleet
-from b52_telemetry.source_registry import B52InstanceId, TelemetrySourceRegistry
+from b52_telemetry.source_registry import B52InstanceId
+from tests.transport_support import registry as TelemetrySourceRegistry
+from tests.transport_support import write_accepted
 
 
 def canonical_payload(
@@ -13,7 +15,11 @@ def canonical_payload(
 ) -> dict[str, object]:
     return {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
+        "instance": "deadbeef00112233deadbeef00112233",
+        "environment": "testnet",
+        "position_sizing_leverage": 3,
         "generated_at": generated_at,
+        "phase": "AWAITING_OPERATOR",
         "system": {
             "https": {
                 "state": "HEALTHY",
@@ -30,16 +36,15 @@ def canonical_payload(
 
 
 def write_payload(path: Path, payload: object) -> None:
-    path.write_text(
-        json.dumps(payload, separators=(",", ":")),
-        encoding="utf-8",
-    )
+    assert isinstance(payload, dict)
+    identity = path.parent.name if path.parent.name.startswith("B52-") else "B52-001"
+    write_accepted(path, payload, identity=identity)
 
 
 def test_projects_single_available_instance_without_reinterpreting_payload(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "B52-001.json"
+    path = tmp_path / "B52-001" / "telemetry.latest.json"
     payload = canonical_payload()
     payload["future_b52_field"] = {
         "owned_by": "B-52",
@@ -67,8 +72,8 @@ def test_projects_single_available_instance_without_reinterpreting_payload(
 def test_projects_multiple_instances_in_registry_order(
     tmp_path: Path,
 ) -> None:
-    first_path = tmp_path / "B52-003.json"
-    second_path = tmp_path / "B52-001.json"
+    first_path = tmp_path / "B52-003" / "telemetry.latest.json"
+    second_path = tmp_path / "B52-001" / "telemetry.latest.json"
 
     first_payload = canonical_payload("2026-09-17T00:00:01+00:00")
     second_payload = canonical_payload("2026-09-17T00:00:02+00:00")
@@ -96,9 +101,9 @@ def test_projects_multiple_instances_in_registry_order(
 def test_unavailable_instance_does_not_suppress_available_peers(
     tmp_path: Path,
 ) -> None:
-    first_path = tmp_path / "B52-001.json"
-    missing_path = tmp_path / "B52-002.json"
-    third_path = tmp_path / "B52-003.json"
+    first_path = tmp_path / "B52-001" / "telemetry.latest.json"
+    missing_path = tmp_path / "B52-002" / "telemetry.latest.json"
+    third_path = tmp_path / "B52-003" / "telemetry.latest.json"
 
     first_payload = canonical_payload("2026-09-17T00:00:01+00:00")
     third_payload = canonical_payload("2026-09-17T00:00:03+00:00")
@@ -140,15 +145,16 @@ def test_unavailable_instance_does_not_suppress_available_peers(
 def test_invalid_instance_does_not_suppress_available_peers(
     tmp_path: Path,
 ) -> None:
-    first_path = tmp_path / "B52-001.json"
-    invalid_path = tmp_path / "B52-002.json"
-    third_path = tmp_path / "B52-003.json"
+    first_path = tmp_path / "B52-001" / "telemetry.latest.json"
+    invalid_path = tmp_path / "B52-002" / "telemetry.latest.json"
+    third_path = tmp_path / "B52-003" / "telemetry.latest.json"
 
     first_payload = canonical_payload("2026-09-17T00:00:01+00:00")
     third_payload = canonical_payload("2026-09-17T00:00:03+00:00")
 
     write_payload(first_path, first_payload)
-    invalid_path.write_text('{"schema_version":3', encoding="utf-8")
+    invalid_path.parent.mkdir(parents=True)
+    invalid_path.write_text('{"schema_version":10', encoding="utf-8")
     write_payload(third_path, third_payload)
 
     registry = TelemetrySourceRegistry(
@@ -185,10 +191,11 @@ def test_invalid_instance_does_not_suppress_available_peers(
 def test_invalid_canonical_snapshot_is_reported_as_invalid(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "B52-001.json"
+    path = tmp_path / "B52-001" / "telemetry.latest.json"
     payload = canonical_payload()
-    payload["schema_version"] = 2
     write_payload(path, payload)
+    payload["schema_version"] = 2
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
     registry = TelemetrySourceRegistry(
         {

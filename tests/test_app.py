@@ -12,6 +12,8 @@ from b52_telemetry.app import _stream_fleet, create_app
 from b52_telemetry.contract import TELEMETRY_SCHEMA_VERSION, TelemetryPayload
 from b52_telemetry.fleet_projection import project_fleet
 from b52_telemetry.source_registry import B52InstanceId, TelemetrySourceRegistry
+from tests.transport_support import registry as create_transport_registry
+from tests.transport_support import write_accepted
 
 TEST_INSTANCE_ID = B52InstanceId("B52-001")
 TEST_INSTANCE = TEST_INSTANCE_ID.value
@@ -22,7 +24,7 @@ def allow_telemetry_access(_: Request) -> None:
 
 
 def create_registry(path: Path) -> TelemetrySourceRegistry:
-    return TelemetrySourceRegistry({TEST_INSTANCE_ID: path})
+    return create_transport_registry({TEST_INSTANCE_ID: path})
 
 
 def create_test_app(path: Path) -> FastAPI:
@@ -35,7 +37,11 @@ def create_test_app(path: Path) -> FastAPI:
 def canonical_payload() -> dict[str, object]:
     return {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
+        "instance": "deadbeef00112233deadbeef00112233",
+        "environment": "testnet",
+        "position_sizing_leverage": 3,
         "generated_at": "2026-09-06T00:15:02+00:00",
+        "phase": "AWAITING_OPERATOR",
         "system": {
             "https": {
                 "state": "HEALTHY",
@@ -76,10 +82,11 @@ def canonical_payload() -> dict[str, object]:
 
 
 def write_payload(path: Path, payload: object) -> None:
-    path.write_text(
-        json.dumps(payload, separators=(",", ":")),
-        encoding="utf-8",
+    assert isinstance(payload, dict)
+    identity = (
+        path.parent.name if path.parent.name.startswith("B52-") else TEST_INSTANCE
     )
+    write_accepted(path, payload, identity=identity)
 
 
 def test_latest_returns_canonical_payload_unchanged(tmp_path: Path) -> None:
@@ -129,8 +136,9 @@ def test_latest_returns_503_when_source_contains_invalid_json(
 def test_latest_returns_503_for_unsupported_schema(tmp_path: Path) -> None:
     path = tmp_path / "telemetry.latest.json"
     payload = canonical_payload()
-    payload["schema_version"] = 2
     write_payload(path, payload)
+    payload["schema_version"] = 2
+    path.write_text(json.dumps(payload), encoding="utf-8")
     client = TestClient(create_test_app(path))
 
     response = client.get(f"/api/telemetry/instances/{TEST_INSTANCE}/latest")
@@ -159,10 +167,8 @@ def test_stream_returns_canonical_payload_as_sse(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from b52_telemetry import app as app_module
-    from b52_telemetry.source import (
-        TelemetryFileSource,
-        TelemetrySourceUnavailable,
-    )
+    from b52_telemetry.persistence import AcceptedTelemetryFileSource
+    from b52_telemetry.source import TelemetrySourceUnavailable
 
     path = tmp_path / "telemetry.latest.json"
     payload = canonical_payload()
@@ -172,11 +178,11 @@ def test_stream_returns_canonical_payload_as_sse(
     }
     write_payload(path, payload)
 
-    original_read = TelemetryFileSource.read
+    original_read = AcceptedTelemetryFileSource.read
     read_count = 0
 
     def read_once_then_unavailable(
-        self: TelemetryFileSource,
+        self: AcceptedTelemetryFileSource,
     ) -> TelemetryPayload:
         nonlocal read_count
         read_count += 1
@@ -189,7 +195,11 @@ def test_stream_returns_canonical_payload_as_sse(
     async def no_sleep(_: float) -> None:
         return None
 
-    monkeypatch.setattr(TelemetryFileSource, "read", read_once_then_unavailable)
+    monkeypatch.setattr(
+        AcceptedTelemetryFileSource,
+        "read",
+        read_once_then_unavailable,
+    )
     monkeypatch.setattr(app_module, "async_sleep", no_sleep)
 
     client = TestClient(create_test_app(path))
@@ -240,20 +250,18 @@ def test_stream_closes_if_source_becomes_invalid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from b52_telemetry import app as app_module
-    from b52_telemetry.source import (
-        TelemetryFileSource,
-        TelemetrySourceInvalid,
-    )
+    from b52_telemetry.persistence import AcceptedTelemetryFileSource
+    from b52_telemetry.source import TelemetrySourceInvalid
 
     path = tmp_path / "telemetry.latest.json"
     payload = canonical_payload()
     write_payload(path, payload)
 
-    original_read = TelemetryFileSource.read
+    original_read = AcceptedTelemetryFileSource.read
     read_count = 0
 
     def read_once_then_invalid(
-        self: TelemetryFileSource,
+        self: AcceptedTelemetryFileSource,
     ) -> TelemetryPayload:
         nonlocal read_count
         read_count += 1
@@ -266,7 +274,11 @@ def test_stream_closes_if_source_becomes_invalid(
     async def no_sleep(_: float) -> None:
         return None
 
-    monkeypatch.setattr(TelemetryFileSource, "read", read_once_then_invalid)
+    monkeypatch.setattr(
+        AcceptedTelemetryFileSource,
+        "read",
+        read_once_then_invalid,
+    )
     monkeypatch.setattr(app_module, "async_sleep", no_sleep)
 
     client = TestClient(create_test_app(path))
@@ -722,8 +734,8 @@ def test_authenticated_cookie_grants_telemetry_stream(
 
 
 def test_latest_resolves_requested_instance_independently(tmp_path: Path) -> None:
-    first_path = tmp_path / "first.json"
-    second_path = tmp_path / "second.json"
+    first_path = tmp_path / "B52-001" / "telemetry.latest.json"
+    second_path = tmp_path / "B52-002" / "telemetry.latest.json"
 
     first_payload = canonical_payload()
     first_payload["generated_at"] = "2026-09-16T10:00:00+00:00"
@@ -734,7 +746,7 @@ def test_latest_resolves_requested_instance_independently(tmp_path: Path) -> Non
     write_payload(first_path, first_payload)
     write_payload(second_path, second_payload)
 
-    registry = TelemetrySourceRegistry(
+    registry = create_transport_registry(
         {
             B52InstanceId("B52-001"): first_path,
             B52InstanceId("B52-002"): second_path,
@@ -818,10 +830,10 @@ def test_authenticated_instance_discovery_returns_registered_instances(
 
     first_id = B52InstanceId("B52-001")
     second_id = B52InstanceId("B52-002")
-    registry = TelemetrySourceRegistry(
+    registry = create_transport_registry(
         {
-            first_id: tmp_path / "first.json",
-            second_id: tmp_path / "second.json",
+            first_id: tmp_path / "B52-001" / "telemetry.latest.json",
+            second_id: tmp_path / "B52-002" / "telemetry.latest.json",
         }
     )
     store = SessionStore()
@@ -878,10 +890,10 @@ def test_instance_discovery_requires_authenticated_session(
 def test_fleet_returns_registered_instances_with_independent_source_states(
     tmp_path: Path,
 ) -> None:
-    first_path = tmp_path / "first.json"
-    invalid_path = tmp_path / "invalid.json"
-    missing_path = tmp_path / "missing.json"
-    fourth_path = tmp_path / "fourth.json"
+    first_path = tmp_path / "B52-001" / "telemetry.latest.json"
+    invalid_path = tmp_path / "B52-003" / "telemetry.latest.json"
+    missing_path = tmp_path / "B52-002" / "telemetry.latest.json"
+    fourth_path = tmp_path / "B52-004" / "telemetry.latest.json"
 
     first_payload = canonical_payload()
     first_payload["generated_at"] = "2026-09-17T00:00:01+00:00"
@@ -890,10 +902,11 @@ def test_fleet_returns_registered_instances_with_independent_source_states(
     fourth_payload["generated_at"] = "2026-09-17T00:00:04+00:00"
 
     write_payload(first_path, first_payload)
-    invalid_path.write_text('{"schema_version":3', encoding="utf-8")
+    invalid_path.parent.mkdir(parents=True)
+    invalid_path.write_text('{"schema_version":10', encoding="utf-8")
     write_payload(fourth_path, fourth_payload)
 
-    registry = TelemetrySourceRegistry(
+    registry = create_transport_registry(
         {
             B52InstanceId("B52-001"): first_path,
             B52InstanceId("B52-002"): missing_path,
@@ -1031,13 +1044,13 @@ def test_fleet_stream_returns_initial_complete_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    first_path = tmp_path / "first.json"
-    missing_path = tmp_path / "missing.json"
+    first_path = tmp_path / "B52-001" / "telemetry.latest.json"
+    missing_path = tmp_path / "B52-002" / "telemetry.latest.json"
 
     first_payload = canonical_payload()
     write_payload(first_path, first_payload)
 
-    registry = TelemetrySourceRegistry(
+    registry = create_transport_registry(
         {
             B52InstanceId("B52-001"): first_path,
             B52InstanceId("B52-002"): missing_path,
@@ -1065,7 +1078,7 @@ def test_fleet_stream_reprojects_registered_sources(
     first_payload["generated_at"] = "2026-09-17T00:00:01+00:00"
     write_payload(path, first_payload)
 
-    registry = TelemetrySourceRegistry(
+    registry = create_transport_registry(
         {
             B52InstanceId("B52-001"): path,
         }
@@ -1113,7 +1126,7 @@ def test_fleet_stream_preserves_unavailable_member_and_continues(
     payload = canonical_payload()
     write_payload(path, payload)
 
-    registry = TelemetrySourceRegistry(
+    registry = create_transport_registry(
         {
             B52InstanceId("B52-001"): path,
         }
@@ -1142,7 +1155,7 @@ def test_fleet_stream_preserves_unavailable_member_and_continues(
         "instances": [
             {
                 "instance_id": "B52-001",
-                "source_state": "UNAVAILABLE",
+                "source_state": "INVALID",
                 "telemetry": None,
             }
         ]

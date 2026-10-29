@@ -12,7 +12,11 @@ from b52_telemetry.contract import (
 def canonical_payload() -> dict[str, object]:
     return {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
+        "instance": "deadbeef00112233deadbeef00112233",
+        "environment": "testnet",
+        "position_sizing_leverage": 3,
         "generated_at": "2026-09-05T10:45:02+00:00",
+        "phase": "AWAITING_OPERATOR",
         "system": {
             "https": {
                 "state": "HEALTHY",
@@ -64,6 +68,14 @@ def test_accepts_supported_canonical_snapshot() -> None:
     ("field", "value", "message"),
     [
         ("generated_at", None, "generated_at must be a non-empty string"),
+        ("instance", None, "instance must be a non-empty string"),
+        ("environment", None, "environment must be a non-empty string"),
+        (
+            "position_sizing_leverage",
+            0,
+            "position_sizing_leverage must be a positive integer",
+        ),
+        ("phase", None, "phase must be a non-empty string"),
         ("system", None, "system must be a JSON object"),
         ("market", "BTCUSDC", "market must be a JSON object or null"),
         ("mission", "ACTIVE", "mission must be a JSON object or null"),

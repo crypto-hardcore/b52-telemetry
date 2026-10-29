@@ -1,0 +1,100 @@
+#include <tunables/global>
+
+# Default deny supplies cross-instance and trading-sensitive denials. Each profile
+# names exactly one B-52 snapshot, relay state, and systemd credential.
+
+profile b52-relay-B52-001 /opt/b52-telemetry/venv/bin/b52-telemetry-relay flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  /opt/b52-telemetry/** rix,
+  /var/lib/b52/B52-001/data/telemetry.latest.json r,
+  /var/lib/b52-relay/B52-001/ rw,
+  /var/lib/b52-relay/B52-001/state.json rwk,
+  /var/lib/b52-relay/B52-001/.state.json.tmp rwk,
+  /run/credentials/b52-telemetry-relay@B52-001.service/producer.token r,
+  network inet stream,
+  network inet6 stream,
+  signal (receive),
+  deny signal (send),
+  deny ptrace,
+}
+
+profile b52-relay-B52-002 /opt/b52-telemetry/venv/bin/b52-telemetry-relay flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  /opt/b52-telemetry/** rix,
+  /var/lib/b52/B52-002/data/telemetry.latest.json r,
+  /var/lib/b52-relay/B52-002/ rw,
+  /var/lib/b52-relay/B52-002/state.json rwk,
+  /var/lib/b52-relay/B52-002/.state.json.tmp rwk,
+  /run/credentials/b52-telemetry-relay@B52-002.service/producer.token r,
+  network inet stream,
+  network inet6 stream,
+  signal (receive),
+  deny signal (send),
+  deny ptrace,
+}
+
+profile b52-relay-B52-003 /opt/b52-telemetry/venv/bin/b52-telemetry-relay flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  /opt/b52-telemetry/** rix,
+  /var/lib/b52/B52-003/data/telemetry.latest.json r,
+  /var/lib/b52-relay/B52-003/ rw,
+  /var/lib/b52-relay/B52-003/state.json rwk,
+  /var/lib/b52-relay/B52-003/.state.json.tmp rwk,
+  /run/credentials/b52-telemetry-relay@B52-003.service/producer.token r,
+  network inet stream,
+  network inet6 stream,
+  signal (receive),
+  deny signal (send),
+  deny ptrace,
+}
+
+profile b52-relay-B52-004 /opt/b52-telemetry/venv/bin/b52-telemetry-relay flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  /opt/b52-telemetry/** rix,
+  /var/lib/b52/B52-004/data/telemetry.latest.json r,
+  /var/lib/b52-relay/B52-004/ rw,
+  /var/lib/b52-relay/B52-004/state.json rwk,
+  /var/lib/b52-relay/B52-004/.state.json.tmp rwk,
+  /run/credentials/b52-telemetry-relay@B52-004.service/producer.token r,
+  network inet stream,
+  network inet6 stream,
+  signal (receive),
+  deny signal (send),
+  deny ptrace,
+}
+
+profile b52-relay-B52-005 /opt/b52-telemetry/venv/bin/b52-telemetry-relay flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  /opt/b52-telemetry/** rix,
+  /var/lib/b52/B52-005/data/telemetry.latest.json r,
+  /var/lib/b52-relay/B52-005/ rw,
+  /var/lib/b52-relay/B52-005/state.json rwk,
+  /var/lib/b52-relay/B52-005/.state.json.tmp rwk,
+  /run/credentials/b52-telemetry-relay@B52-005.service/producer.token r,
+  network inet stream,
+  network inet6 stream,
+  signal (receive),
+  deny signal (send),
+  deny ptrace,
+}
+
+profile b52-relay-B52-006 /opt/b52-telemetry/venv/bin/b52-telemetry-relay flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  /opt/b52-telemetry/** rix,
+  /var/lib/b52/B52-006/data/telemetry.latest.json r,
+  /var/lib/b52-relay/B52-006/ rw,
+  /var/lib/b52-relay/B52-006/state.json rwk,
+  /var/lib/b52-relay/B52-006/.state.json.tmp rwk,
+  /run/credentials/b52-telemetry-relay@B52-006.service/producer.token r,
+  network inet stream,
+  network inet6 stream,
+  signal (receive),
+  deny signal (send),
+  deny ptrace,
+}

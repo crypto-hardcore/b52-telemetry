@@ -16,7 +16,11 @@ from b52_telemetry.source import (
 def canonical_payload() -> dict[str, object]:
     return {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
+        "instance": "deadbeef00112233deadbeef00112233",
+        "environment": "testnet",
+        "position_sizing_leverage": 3,
         "generated_at": "2026-09-06T00:15:02+00:00",
+        "phase": "AWAITING_OPERATOR",
         "system": {
             "https": {
                 "state": "HEALTHY",

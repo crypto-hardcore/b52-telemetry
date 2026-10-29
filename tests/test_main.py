@@ -10,10 +10,26 @@ import pytest
 from fastapi import FastAPI
 
 from b52_telemetry.source_registry import B52InstanceId
+from tests.transport_support import PRODUCER_DIGEST, PRODUCER_TOKEN, write_accepted
 
 TELEMETRY_SOURCES_ENVIRONMENT_VARIABLE = "B52_TELEMETRY_SOURCES"
 TELEMETRY_ACCESS_KEY_ENVIRONMENT_VARIABLE = "B52_TELEMETRY_ACCESS_KEY"
 MODULE_NAME = "b52_telemetry.main"
+
+
+def configured_registration(
+    path: Path,
+    *,
+    credential_digest: str = PRODUCER_DIGEST,
+) -> dict[str, object]:
+    return {
+        "path": str(path),
+        "producer": {
+            "enabled": True,
+            "authorization_generation": 1,
+            "credential_sha256": credential_digest,
+        },
+    }
 
 
 def import_main() -> ModuleType:
@@ -25,33 +41,44 @@ def test_production_app_uses_configured_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    first_path = tmp_path / "B52-001.json"
-    second_path = tmp_path / "B52-002.json"
+    first_path = tmp_path / "B52-001" / "telemetry.latest.json"
+    second_path = tmp_path / "B52-002" / "telemetry.latest.json"
 
     first_payload = {
-        "schema_version": 3,
+        "schema_version": 10,
+        "instance": "first-process",
+        "environment": "testnet",
+        "position_sizing_leverage": 3,
         "generated_at": "2026-09-16T10:00:00+00:00",
+        "phase": "AWAITING_OPERATOR",
         "system": {},
         "market": None,
         "mission": None,
     }
     second_payload = {
-        "schema_version": 3,
+        "schema_version": 10,
+        "instance": "second-process",
+        "environment": "testnet",
+        "position_sizing_leverage": 3,
         "generated_at": "2026-09-16T10:00:01+00:00",
+        "phase": "AWAITING_OPERATOR",
         "system": {},
         "market": None,
         "mission": None,
     }
 
-    first_path.write_text(json.dumps(first_payload), encoding="utf-8")
-    second_path.write_text(json.dumps(second_payload), encoding="utf-8")
+    write_accepted(first_path, first_payload, identity="B52-001")
+    write_accepted(second_path, second_payload, identity="B52-002")
 
     monkeypatch.setenv(
         TELEMETRY_SOURCES_ENVIRONMENT_VARIABLE,
         json.dumps(
             {
-                "B52-001": str(first_path),
-                "B52-002": str(second_path),
+                "B52-001": configured_registration(first_path),
+                "B52-002": configured_registration(
+                    second_path,
+                    credential_digest="1" * 64,
+                ),
             }
         ),
     )
@@ -143,7 +170,9 @@ def test_production_app_requires_telemetry_access_key(
         TELEMETRY_SOURCES_ENVIRONMENT_VARIABLE,
         json.dumps(
             {
-                "B52-001": str(tmp_path / "telemetry.jsonl"),
+                "B52-001": configured_registration(
+                    tmp_path / "B52-001" / "telemetry.latest.json"
+                ),
             }
         ),
     )
@@ -164,5 +193,29 @@ def test_production_app_requires_telemetry_access_key(
     with pytest.raises(
         RuntimeError,
         match="B52_TELEMETRY_ACCESS_KEY must be configured",
+    ):
+        importlib.import_module(MODULE_NAME)
+
+
+def test_production_app_rejects_browser_key_equal_to_producer_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        TELEMETRY_SOURCES_ENVIRONMENT_VARIABLE,
+        json.dumps(
+            {
+                "B52-001": configured_registration(
+                    tmp_path / "B52-001" / "telemetry.latest.json"
+                )
+            }
+        ),
+    )
+    monkeypatch.setenv(TELEMETRY_ACCESS_KEY_ENVIRONMENT_VARIABLE, PRODUCER_TOKEN)
+    sys.modules.pop(MODULE_NAME, None)
+
+    with pytest.raises(
+        RuntimeError,
+        match="browser access key must not equal",
     ):
         importlib.import_module(MODULE_NAME)

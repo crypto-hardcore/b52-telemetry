@@ -19,6 +19,8 @@ test = [
 
 [project.scripts]
 b52-telemetry = "b52_telemetry.server:main"
+b52-telemetry-admin = "b52_telemetry.admin:main"
+b52-telemetry-relay = "b52_telemetry.relay:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

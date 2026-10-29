@@ -8,6 +8,7 @@ def main() -> None:
         "b52_telemetry.main:app",
         host="127.0.0.1",
         port=8000,
+        workers=1,
         proxy_headers=True,
         forwarded_allow_ips="127.0.0.1",
     )

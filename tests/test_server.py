@@ -7,7 +7,9 @@ import uvicorn
 from b52_telemetry import server
 
 
-def test_production_server_binds_only_to_loopback(monkeypatch: Any) -> None:
+def test_production_server_binds_to_loopback_with_exactly_one_worker(
+    monkeypatch: Any,
+) -> None:
     invocation: dict[str, Any] = {}
 
     def fake_run(app: str, **kwargs: Any) -> None:
@@ -15,6 +17,7 @@ def test_production_server_binds_only_to_loopback(monkeypatch: Any) -> None:
         invocation.update(kwargs)
 
     monkeypatch.setattr(uvicorn, "run", fake_run)
+    monkeypatch.setenv("WEB_CONCURRENCY", "8")
 
     server.main()
 
@@ -22,6 +25,7 @@ def test_production_server_binds_only_to_loopback(monkeypatch: Any) -> None:
         "app": "b52_telemetry.main:app",
         "host": "127.0.0.1",
         "port": 8000,
+        "workers": 1,
         "proxy_headers": True,
         "forwarded_allow_ips": "127.0.0.1",
     }
